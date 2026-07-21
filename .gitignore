@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+
+# Cache de Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Measurements/experiments locales de PhD -no versionar, se generan en cada corrida.
+**/measures/
+**/experiments/
+
+# Librerias/proyectos externos que NO se versionan dentro de PhD -cada uno
+# es (o va a ser) su propio repo, clonado aparte:
+#   - palace: upstream sin cambios propios, y la carpeta build/ tiene binarios
+#     compilados (nunca van a git).
+#   - SQDMetal, qiskit-metal-dev, toolkit: ya son forks/repos propios en
+#     GitHub. Si mas adelante se agregan como git submodule, esta linea deja
+#     de hacer falta para esa carpeta puntual (el mecanismo de submodulos
+#     reemplaza al gitignore).
+src/libraries/palace/
+src/libraries/SQDMetal/
+src/libraries/qiskit-metal-dev/
+src/toolkit/
+
+# Resultados de simulaciones (mallas, configs, paraview) -se regeneran cada
+# corrida y pesan mucho, no tiene sentido versionarlos.
+**/outputFiles/
+**/*.msh
+**/paraview/
+
+
+# Config/sesiones locales de Claude Code -saca esta linea si en algun
+# momento queres versionar settings.json/agents/skills del proyecto.
+.claude/
+.licenses
