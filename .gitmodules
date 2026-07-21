@@ -1,0 +1,10 @@
+[submodule "src/libraries/SQDMetal"]
+	path = src/libraries/SQDMetal
+	url = https://github.com/maximilianogatto/SQDMetal_QCT.git
+	branch = local-patches
+[submodule "src/libraries/qiskit-metal-dev"]
+	path = src/libraries/qiskit-metal-dev
+	url = https://github.com/maximilianogatto/qiskit-metal-dev.git
+[submodule "src/toolkit"]
+	path = src/toolkit
+	url = https://github.com/maximilianogatto/toolkit.git

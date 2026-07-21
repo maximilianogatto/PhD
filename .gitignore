@@ -9,6 +9,7 @@ __pycache__/
 # Measurements/experiments locales de PhD -no versionar, se generan en cada corrida.
 **/measures/
 **/experiments/
+postulation/
 
 # Librerias/proyectos externos que NO se versionan dentro de PhD -cada uno
 # es (o va a ser) su propio repo, clonado aparte:
@@ -19,9 +20,9 @@ __pycache__/
 #     de hacer falta para esa carpeta puntual (el mecanismo de submodulos
 #     reemplaza al gitignore).
 src/libraries/palace/
-src/libraries/SQDMetal/
-src/libraries/qiskit-metal-dev/
-src/toolkit/
+# src/libraries/SQDMetal/
+# src/libraries/qiskit-metal-dev/
+# src/toolkit/
 
 # Resultados de simulaciones (mallas, configs, paraview) -se regeneran cada
 # corrida y pesan mucho, no tiene sentido versionarlos.

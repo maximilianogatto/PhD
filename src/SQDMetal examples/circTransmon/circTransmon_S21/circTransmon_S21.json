@@ -1,0 +1,134 @@
+{
+  "Problem": {
+    "Type": "Driven",
+    "Verbose": 2,
+    "Output": "outputFiles"
+  },
+  "Model": {
+    "Mesh": "circTransmon_S21.msh",
+    "L0": 0.001,
+    "CrackDisplacementFactor": 0,
+    "Refinement": {
+      "UniformLevels": 0,
+      "Tol": 0.01,
+      "MaxIts": 2,
+      "MaxSize": 0,
+      "UpdateFraction": 0.7,
+      "Nonconformal": false,
+      "SaveAdaptIterations": true,
+      "SaveAdaptMesh": false
+    }
+  },
+  "Domains": {
+    "Materials": [
+      {
+        "Attributes": [
+          9
+        ],
+        "Permeability": 1.0,
+        "Permittivity": 1.0,
+        "LossTan": 0.0
+      },
+      {
+        "Attributes": [
+          10
+        ],
+        "Permeability": 1,
+        "Permittivity": 11.45,
+        "LossTan": 1.2e-05
+      }
+    ]
+  },
+  "Boundaries": {
+    "PEC": {
+      "Attributes": [
+        5,
+        6,
+        7,
+        8,
+        12,
+        11,
+        14,
+        13,
+        16,
+        15
+      ]
+    },
+    "LumpedPort": [
+      {
+        "Index": 1,
+        "Elements": [
+          {
+            "Attributes": [
+              1
+            ],
+            "Direction": [
+              -0.0,
+              -1.0,
+              0
+            ]
+          },
+          {
+            "Attributes": [
+              2
+            ],
+            "Direction": [
+              0.0,
+              1.0,
+              0
+            ]
+          }
+        ],
+        "R": 50,
+        "L": 0,
+        "C": 0,
+        "Excitation": true
+      },
+      {
+        "Index": 2,
+        "Elements": [
+          {
+            "Attributes": [
+              3
+            ],
+            "Direction": [
+              0.0,
+              1.0,
+              0
+            ]
+          },
+          {
+            "Attributes": [
+              4
+            ],
+            "Direction": [
+              -0.0,
+              -1.0,
+              0
+            ]
+          }
+        ],
+        "R": 50,
+        "L": 0,
+        "C": 0
+      }
+    ],
+    "WavePort": []
+  },
+  "Solver": {
+    "Order": 1,
+    "Driven": {
+      "MinFreq": 6.5,
+      "MaxFreq": 7.5,
+      "FreqStep": 0.01,
+      "SaveStep": 4
+    },
+    "Linear": {
+      "Type": "SuperLU",
+      "KSPType": "FGMRES",
+      "Tol": 0.001,
+      "MaxIts": 300,
+      "InitialGuess": true
+    }
+  }
+}
