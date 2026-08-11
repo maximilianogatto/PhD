@@ -335,6 +335,29 @@ class PPSCounter(InstrumentModule):
         self._last_edges = np.asarray(edges, dtype=np.int64)
         return self._last_edges
 
+    # ================================================================ checks
+    def check(self):
+        """Problems with the current 1 pps configuration.
+
+        Returns a list of (level, where, message). See USB6289.check().
+        """
+        problems = []
+        if not self.terminal():
+            problems.append((
+                "warning", "pps",
+                "terminal is not set, so no atomic seconds are recorded. "
+                "acquire() still works, but the time axis is the board's own "
+                "clock - ~4 s/day of drift - and long_run() will refuse to "
+                "start. Set daq.pps.terminal('/Dev1/PFI9') (terminal 83)."))
+            return problems
+
+        owner = self.root_instrument._counter_owners.get(self.counter())
+        if owner is not None and owner != self.full_name:
+            problems.append((
+                "error", "pps",
+                f"counter {self.counter()} is held by {owner}"))
+        return problems
+
     # ============================================================== metadata
     def describe(self):
         return {"terminal": self.terminal(),

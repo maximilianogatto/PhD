@@ -55,45 +55,37 @@ ONE ACQUISITION FEEDS EVERY CHANNEL. Two facts that do not fit together:
                    then ai3.trace(), and never says which loop iteration it
                    is on.
 
-So acquire() runs the hardware once and splits the block into one array per
+acquire() runs the hardware once and splits the block into one array per
 channel, kept in self._last:
 
     data = ...                      # 2-D, (n_channels, n_samples)
     self._last = {"ai0": row 0, "ai3": row 1}
 
-Picking one channel out of that is a dictionary lookup - the easy part. The
-hard part is deciding, when ai0.trace() is called, whether to run the hardware
-again or hand back the row already in _last. Nothing in the call says. So the
-code infers it, with a set called self._consumed holding the names of the
-channels that have already been given the current scan:
+trace() then only PICKS a row out of that. It never measures. So there is
+exactly one line in your code where the hardware runs, and it is one you
+wrote:
 
-    ai0.trace()   _consumed is empty         -> ACQUIRE scan 1, then tick ai0
-                                                 _consumed = {ai0}
-    ai3.trace()   ai3 is not in _consumed    -> no acquisition, hand back
-                                                 ai3's row of scan 1
-                                                 _consumed = {ai0, ai3}
-    ai0.trace()   ai0 IS in _consumed - it   -> ACQUIRE scan 2. acquire()
-                  already took scan 1, so       clears _consumed, then ai0
-                  the loop must have gone       is ticked again
-                  round again                   _consumed = {ai0}
-    ai3.trace()   not in _consumed again     -> ai3's row of scan 2
-                                                 _consumed = {ai0, ai3}
+    with meas.run() as datasaver:
+        for x in sweep:
+            daq.ai.acquire()                     # <- the hardware runs HERE
+            datasaver.add_result(
+                (daq.ai.time_axis, daq.ai.time_axis()),
+                *[(ch.trace, ch.trace()) for ch in daq.ai.active])
 
-Three consequences:
+Every channel in one iteration therefore comes from the same scan, by
+construction rather than by inference, and reading a channel twice, in a
+different order, or not at all changes nothing.
 
-  * both channels always come from the SAME scan - they are the same block of
-    data, split up, not two separate measurements;
-  * one pass of a loop costs exactly one acquisition, not one per channel;
-  * the order does not matter. Reading ai3 first behaves identically, so
-    registration order is free:
+An earlier version inferred when to re-measure, by tracking which channels
+had already been handed the current scan. It worked, but reading one channel
+twice inside an iteration silently desynchronised the others, and any
+mechanism that measures as a SIDE EFFECT of a get is a mechanism that can
+measure when you did not mean it to - a station snapshot with update=True
+would have done exactly that. Explicit is worth the extra line.
 
-        for ch in daq.ai.active:
-            meas.register_parameter(ch.trace, setpoints=(daq.ai.time_axis,))
-
-The cost: trace() is not a way to look at the same data twice. Reading the
-same channel twice in a row deliberately re-measures. To re-read without
-re-measuring use daq.ai.last["ai0"], and to take everything in one go call
-daq.ai.acquire(), which returns the whole dict.
+Consequently trace() RAISES rather than measuring if there is no scan in
+hand, or if the channel was not in it. Silently returning a stale array is
+the one failure that would not be noticed until the run was over.
 """
 
 import sys
@@ -173,15 +165,12 @@ class AIAtomTimeAxis(Parameter):
 
 
 class AITrace(ParameterWithSetpoints):
-    """One channel's samples.
+    """One channel's samples, from the scan currently in hand.
 
-    Reading this does not necessarily measure. The hardware produces every
-    enabled channel in one block, so this asks the subsystem for its own row
-    of the block already in hand, and a new measurement happens only if this
-    channel has already been given that one. See the module docstring.
-
-    Consequence: reading the same channel twice in a row measures twice. To
-    look at the same data again use daq.ai.last[name].
+    Reading this NEVER measures. The hardware produces every enabled channel
+    in one block, so this just picks its own row out of the block that
+    daq.ai.acquire() put there. Call acquire() yourself, once per measurement
+    point; this raises if you have not. See the module docstring.
     """
 
     def get_raw(self):
@@ -284,9 +273,8 @@ class AnalogInput(InstrumentModule):
         self._actual_rate = None
         self._conv_rate = None
 
-        # --- last acquisition, and which channels have taken it
+        # --- the scan currently in hand, produced only by acquire()
         self._last = None            # {channel name: 1-D array}
-        self._consumed = set()
         self._generation = 0         # bumped per acquisition; for debugging
 
         self._on_armed = None
@@ -394,6 +382,11 @@ class AnalogInput(InstrumentModule):
         """
         self._actual_rate = None
         self._conv_rate = None
+        # The held scan was produced under the OLD configuration, so it no
+        # longer matches what describe() would say about it. Drop it: trace()
+        # then raises instead of handing back an array that quietly belongs to
+        # a different setup.
+        self._last = None
 
     def _set_invalidating(self, _value):
         self.invalidate()
@@ -569,9 +562,6 @@ class AnalogInput(InstrumentModule):
         # Concatenate the blocks into one array, and trim to the requested length.
         data = np.concatenate(blocks, axis=1)[:, :n_target]
         self._last = {ch.short_name: data[i] for i, ch in enumerate(active)}
-        # New data has just arrived, so nobody has been given it yet. set() is
-        # an EMPTY set - this line forgets which channels took the last scan.
-        self._consumed = set()
         self._generation += 1  
         return self._last
 
@@ -626,35 +616,75 @@ class AnalogInput(InstrumentModule):
                 task.stop()
 
     def read_for(self, channel):
-        """Pick one channel's array out of the current scan, measuring first
-        if the scan it would pick from is no longer fresh for this channel.
+        """Pick one channel's array out of the scan currently in hand.
 
-        Freshness cannot be asked for, so it is inferred: if this channel has
-        ALREADY been handed the scan in self._last, the only reason it can be
-        asking again is that the measurement loop came round, so measure
-        again. See the worked example in the module docstring.
+        Never measures. acquire() is the ONLY thing that touches the hardware,
+        and you call it - see the module docstring. Raises rather than
+        returning anything if there is no scan to pick from, because silently
+        handing back a stale array is the one failure that would not be
+        noticed until the run was over.
         """
         name = channel.short_name
-        if not channel.enabled():
-            raise RuntimeError(
-                f"{name} is not enabled, so it is not in the task. "
-                f"daq.ai.{name}.enabled(True) first.")
 
         if self._last is None:
-            self.acquire()                 # nothing measured yet
-        elif name in self._consumed:
-            self.acquire()                 # this channel already took this scan
-        elif name not in self._last:
-            self.acquire()                 # enabled since the scan was taken
+            raise RuntimeError(
+                f"no acquisition to read {name} from. Call daq.ai.acquire() "
+                f"first - it measures every enabled channel at once, and "
+                f"trace() only picks one channel out of the result.")
 
-        self._consumed.add(name)           # tick this channel off
+        if name not in self._last:
+            raise RuntimeError(
+                f"{name} was not in the last acquisition, which holds "
+                f"{sorted(self._last)}. Either it was not enabled when "
+                f"acquire() ran, or the configuration changed since. Enable "
+                f"it and call daq.ai.acquire() again.")
+
         return self._last[name]
 
     @property
     def last(self):
-        """The current scan as a dict, without consuming it. None if never
-        acquired."""
+        """The scan currently in hand, as {channel: array}. None if acquire()
+        has not run, or if the configuration changed since it did."""
         return self._last
+
+    # =============================================================== checks
+    def check(self):
+        """Problems with the current AI configuration, without acquiring.
+
+        Returns a list of (level, where, message). See USB6289.check().
+        """
+        problems = []
+        active = self.active
+
+        for test in (self._check_channel_set, self._check_rate):
+            try:
+                test(active)
+            except ValueError as e:
+                problems.append(("error", "ai", str(e)))
+
+        if problems:
+            return problems              # _verify would only re-raise these
+
+        try:
+            # Builds the task and hands it to DAQmx for verification, which
+            # programs the clocks without starting them. This is what catches
+            # a trigger terminal that cannot be routed - the failure that
+            # otherwise appears only when the run starts.
+            rate, _ = self._verify()
+        except Exception as e:
+            problems.append(("error", "ai",
+                             f"DAQmx rejected the AI task: {e}"))
+            return problems
+
+        megabytes = self.n_samples() * len(active) * 4 / 1e6
+        if megabytes > 1000:
+            problems.append((
+                "warning", "ai",
+                f"one acquire() would allocate {megabytes / 1000:.1f} GB "
+                f"({self.duration():g} s x {rate:,.0f} S/s x {len(active)} "
+                f"channels, float32). Use acquire_chunks() or long_run() "
+                f"instead of holding it in RAM."))
+        return problems
 
     # ============================================================ metadata
     def describe(self):

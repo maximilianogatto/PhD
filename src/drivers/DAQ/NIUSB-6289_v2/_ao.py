@@ -561,6 +561,53 @@ class AnalogOutput(InstrumentModule):
                 for name, value in previous.items():
                     self.parameters[name](value)
 
+    # =============================================================== checks
+    def check(self):
+        """Problems with the current AO configuration, without generating.
+
+        Returns a list of (level, where, message). See USB6289.check().
+        """
+        problems = []
+        wave = self._get_wave_channel()
+
+        if wave is None:
+            if self.trigger():
+                problems.append((
+                    "warning", "ao",
+                    f"trigger is {self.trigger()} but no channel has role "
+                    f"'wave', so nothing will ever wait for it."))
+            return problems
+
+        # The combined limit, which no single validator can see: amp and
+        # offset are each legal on their own. Checked here rather than at set
+        # time so that (1, 0) -> (8, 4) stays reachable - either order of
+        # assignment passes through a state this rejects.
+        peak = self.amp() + abs(self.offset())
+        if peak > AO_MAX:
+            problems.append((
+                "error", "ao",
+                f"amp ({self.amp():g}) + |offset| ({abs(self.offset()):g}) = "
+                f"{peak:g} V exceeds +/-{AO_MAX} V on {wave}"))
+
+        buffer_len = self.buffer_len_now()
+        fifo = self.fifo_samples_now()
+        if buffer_len > fifo:
+            problems.append((
+                "warning", "ao",
+                f"waveform buffer is {buffer_len:,} samples, over the "
+                f"{fifo:,}-sample onboard FIFO, so it will be regenerated "
+                f"across USB and can underflow under heavy AI load. Lower "
+                f"ao.rate or raise ao.freq."))
+
+        _, _, actual = self._shape_params()
+        if abs(actual - self.freq()) / self.freq() > 0.01:
+            problems.append((
+                "warning", "ao",
+                f"freq {self.freq():g} Hz snaps to {actual:g} Hz at "
+                f"ao.rate {self.rate():,.0f} S/s - a whole number of samples "
+                f"must fit one period. Raise ao.rate for finer steps."))
+        return problems
+
     # ============================================================ metadata
     def describe(self):
         wave = self._get_wave_channel()

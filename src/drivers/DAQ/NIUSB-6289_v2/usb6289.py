@@ -27,6 +27,7 @@ as v1:
 import json
 import queue
 import sys
+import textwrap
 import threading
 import time
 from collections import deque
@@ -382,6 +383,80 @@ class USB6289(Instrument):
 
         print(f"\n  over a day that error is "
               f"{abs(r['ppm']) * 86400 / 1e6:.2f} s")
+
+    # ================================================================= check
+    def check(self, verbose=True, strict=False):
+        """Validate the whole configuration WITHOUT acquiring or generating.
+
+        Put it at the top of a script. The alternative is finding out hours
+        in, when start() or long_run() finally builds the task and DAQmx
+        objects to something you set before lunch.
+
+        It exists because the interesting constraints span parameters -
+        amp + |offset| against the output range, rate x channels against the
+        aggregate limit, a trigger terminal that must actually be routable -
+        and a `vals=` validator sees one parameter at a time. Checking those
+        at set time would also make legal transitions impossible: going from
+        (amp 1, offset 0) to (amp 8, offset 4) passes through an invalid state
+        whichever order you assign them in.
+
+        Returns a list of (level, where, message), empty if all is well.
+        level is 'error' (this configuration cannot run) or 'warning' (it can
+        run, but probably not the way you intended). strict=True raises on any
+        error instead of returning.
+
+            daq.check()                 # prints a report
+            if daq.check(verbose=False):
+                ...                     # something to say
+            daq.check(strict=True)      # refuse to continue
+        """
+        problems = []
+        for name in ("ai", "pps", "ao"):
+            module = getattr(self, name, None)
+            if module is not None and hasattr(module, "check"):
+                problems.extend(module.check())
+
+        # --- cross-subsystem: only the root can see these
+        if self.ai.trigger() and self.ao.wave_channel() \
+                and not self.ao.trigger():
+            problems.append((
+                "warning", "daq",
+                f"ai.trigger is {self.ai.trigger()} but ao.trigger is None, "
+                f"so the waveform free-runs and its phase at scan 0 is "
+                f"arbitrary. Point both at the same terminal to fix the phase."))
+
+        if self.pps.terminal() and self.ai.trigger() == self.pps.terminal():
+            problems.append((
+                "warning", "daq",
+                "ai.trigger and pps.terminal are the same line, so scan 0 IS "
+                "an atomic second and the first edge comes back as 0. "
+                "Deliberate and useful - flagged only so it is not a "
+                "surprise."))
+
+        if verbose:
+            self._print_check(problems)
+        if strict:
+            errors = [p for p in problems if p[0] == "error"]
+            if errors:
+                raise RuntimeError(
+                    "configuration cannot run:\n" +
+                    "\n".join(f"  [{where}] {message}"
+                              for _, where, message in errors))
+        return problems
+
+    def _print_check(self, problems):
+        if not problems:
+            print(f"{self.name}: configuration OK")
+            return
+        errors = sum(1 for level, _, _ in problems if level == "error")
+        warnings = len(problems) - errors
+        print(f"{self.name}: {errors} error(s), {warnings} warning(s)")
+        for level, where, message in problems:
+            tag = "ERROR  " if level == "error" else "warning"
+            first, *rest = textwrap.wrap(message, 68)
+            print(f"  {tag} [{where:3}] {first}")
+            for line in rest:
+                print(f"{'':16}{line}")      # aligns under the message
 
     # ================================================================ wiring
     def wiring(self, verbose=True):
