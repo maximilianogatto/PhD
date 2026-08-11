@@ -25,7 +25,76 @@ import numpy as np
 
 # =============== Time to atomic seconds ==========================
 
-def times_from_edges(sample_idx, edges):
+def clean_edges(edges, scans_per_second, tol=0.05):
+    """Drop latched counter values that cannot be atomic seconds.
+
+    Returns (kept, dropped). An atomic second is one second: the gap between
+    consecutive edges must be a whole number of seconds' worth of scans. A gap
+    of 2 or 3 seconds is fine - that is a MISSED edge, and times_from_edges
+    handles it, because edge k is still k atomic seconds from edge 0 only if
+    no edge was missed... which is why a missed edge must be kept as a gap and
+    never silently closed up. What is rejected is a gap that is not near ANY
+    whole second.
+
+    In practice there is one such value per acquisition, and it is always the
+    last. The counter latches the AI scan count on each 1 pps edge; when the
+    AI task stops, the sample clock stops and the count freezes, and one more
+    value comes back carrying that frozen count. It is not an atomic second -
+    it is where the acquisition ended, typically a few tens of milliseconds
+    after the last real edge. Left in, it drags the mean rate down brutally:
+    on a 60 s record a 16 ms straggler turned +14 ppm into +16,403 ppm.
+
+    tol=0.05 accepts anything within 5% of a whole second. That is 50,000 ppm
+    - enormous next to the +/-50 ppm a board like this can drift, and far
+    tighter than the artefact it rejects.
+    """
+    edges = np.asarray(edges, dtype=np.int64)
+    if len(edges) < 2 or not scans_per_second:
+        return edges, np.zeros(0, dtype=np.int64)
+
+    keep, dropped = [0], []
+    for i in range(1, len(edges)):
+        seconds = (edges[i] - edges[keep[-1]]) / scans_per_second
+        if seconds < 0.5 or abs(seconds - round(seconds)) > tol:
+            dropped.append(i)
+        else:
+            keep.append(i)
+    return edges[keep], edges[dropped]
+
+
+def _atomic_seconds(edges, scans_per_second=None):
+    """How many atomic seconds after the first edge each edge is.
+
+    NOT simply arange(len(edges)). That assumes edge k is k seconds after
+    edge 0, which is false the moment ONE edge is missed: the following edges
+    would each be numbered one second too early, silently compressing the time
+    axis by a second and every later measurement with it.
+
+    Instead each gap is rounded to a whole number of seconds - which it must
+    be, the pulses being one atomic second apart - so a missed edge shows up
+    as a step of 2 and the numbering stays true. With nothing missed this is
+    identical to arange.
+
+    scans_per_second defaults to the MEDIAN gap, which is robust: it is the
+    right answer as long as fewer than half the edges are missing.
+
+    LIMIT: this cannot see seconds that passed while the AI clock was stopped
+    (a long_run gap). The counter counts sample clock ticks, and there are
+    none during a gap, so every edge in that window latches the same frozen
+    count. clean_edges discards those, but the atomic seconds they represent
+    are simply not recoverable from the counts - which is why gaps go in the
+    manifest, and why two segments either side of one are not continuous.
+    """
+    edges = np.asarray(edges, dtype=np.float64)
+    gaps = np.diff(edges)
+    if scans_per_second is None:
+        scans_per_second = np.median(gaps)
+    steps = np.rint(gaps / scans_per_second)
+    steps[steps < 1] = 1.0
+    return np.concatenate([[0.0], np.cumsum(steps)])
+
+
+def times_from_edges(sample_idx, edges, scans_per_second=None):
     """Seconds since the first 1 pps edge, for global scan indices.
 
     Edge k is exactly k atomic seconds after edge 0, so this interpolates
@@ -39,13 +108,21 @@ def times_from_edges(sample_idx, edges):
     than at the first edge, and np.interp clamps instead of extrapolating, so
     everything before the first edge collapsed to 0. This is the version that
     was commented out below it, and it matches what the docstrings claim.
+
+    Pass scans_per_second (daq.ai.actual_rate(), or the nominal_rate in the
+    manifest) to run clean_edges first. edges.i64 is written raw and lossless,
+    so the end-of-acquisition artefact is in the file and has to be filtered
+    here rather than at write time.
     """
+    if scans_per_second:
+        edges, _ = clean_edges(edges, scans_per_second)
+
     edges = np.asarray(edges, dtype=np.float64)
     if len(edges) < 2:
         raise ValueError("need at least two 1 pps edges to build a time axis")
 
     idx = np.asarray(sample_idx, dtype=np.float64)
-    atom_sec = np.arange(len(edges), dtype=np.float64)
+    atom_sec = _atomic_seconds(edges, scans_per_second)
     t = np.interp(idx, edges, atom_sec)      # exact between edges, clamped outside
 
     before, after = idx < edges[0], idx > edges[-1]

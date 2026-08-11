@@ -373,6 +373,72 @@ class AnalogInput(InstrumentModule):
                 channel.enabled(False)
         return self.active
 
+    def setup(self, channels=None, rate=None, duration=None, trigger=None,
+              terminal_config=None):
+        """Configure the subsystem in one call. Returns the enabled channels.
+
+        `channels` says WHICH inputs are on and, if you want, what range each
+        one uses - one place, not one call per channel per setting:
+
+            daq.ai.setup(channels={"ai0": 2.0,           # +/- 2 V
+                                   "ai3": (-0.5, 1.5)},  # explicit min, max
+                         rate=25_000, duration=0.1)
+
+        A range is either a single number, meaning +/- that, or a (min, max)
+        pair when it is not symmetric. Both snap up to the nearest hardware
+        range - each input has its own programmable gain, so mixing them is
+        free. (Neighbours in the task with very different ranges make the mux
+        settle worse; see the ghosting note at the top of this module.)
+
+        When you do not care about the range, name the channels and nothing
+        else - they keep whatever they had:
+
+            daq.ai.setup("ai0", rate=25_000, duration=0.1)
+            daq.ai.setup(["ai0", "ai3"], rate=25_000)
+
+        Only what you pass is changed; anything left as None keeps its value.
+        Enabling is exclusive, as in enable(): channels you do not name are
+        switched off.
+
+        Returns the channel objects, so you can keep handles in one line:
+
+            ai0, ai3 = daq.ai.setup({"ai0": 2.0, "ai3": 10.0}, rate=25_000)
+        """
+        if channels is not None:
+            if isinstance(channels, str):
+                ranges = {channels: None}
+            elif isinstance(channels, dict):
+                ranges = dict(channels)
+            else:
+                ranges = {name: None for name in channels}
+
+            self.enable(*ranges)
+            for name, limits in ranges.items():
+                if limits is None:
+                    continue
+                channel = getattr(self, name)
+                try:
+                    v_min, v_max = limits          # a (min, max) pair
+                except TypeError:
+                    v_min, v_max = -abs(limits), abs(limits)   # symmetric
+                # Widen first, so the intermediate state is never inverted:
+                # setting v_min above the current v_max would fail validation
+                # in _configure even though the final pair is fine.
+                channel.v_max(max(v_max, channel.v_max()))
+                channel.v_min(v_min)
+                channel.v_max(v_max)
+
+        if rate is not None:
+            self.rate(rate)
+        if duration is not None:
+            self.duration(duration)
+        if trigger is not None:
+            self.trigger(trigger)
+        if terminal_config is not None:
+            for channel in self.active:
+                channel.terminal_config(terminal_config)
+        return self.active
+
     def invalidate(self):
         """Drop everything verified against the hardware.
 

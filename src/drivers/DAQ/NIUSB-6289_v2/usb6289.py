@@ -306,6 +306,12 @@ class USB6289(Instrument):
         previous = self.ai.duration()
         if seconds is not None:
             self.ai.duration(seconds)
+        # Capture it NOW: the finally below puts the old duration back, so
+        # reading it afterwards would describe the wrong acquisition. (v1 read
+        # it afterwards, so clock_check(seconds=5) called with a 0.1 s
+        # duration reported "expected ~0 edges" and never warned about a
+        # counter that was catching none.)
+        measured_for = self.ai.duration()
         try:
             if self.ao.wave_channel():
                 with self.ao.generating():      # runs during the read
@@ -316,11 +322,13 @@ class USB6289(Instrument):
             self.ai.duration(previous)
 
         nominal = self.ai.actual_rate()
-        expected = int(self.ai.duration())
+        expected = int(measured_for)
+        raw = self.pps.last_edges_raw
         result = {"counts": counts, "n_edges": len(counts),
                   "n_edges_expected": expected, "nominal_rate": nominal,
                   "true_rate": self.pps.measured_rate(),
-                  "ppm": self.pps.ppm()}
+                  "ppm": self.pps.ppm(),
+                  "n_dropped": (0 if raw is None else len(raw) - len(counts))}
 
         if len(counts) < expected - 1:
             self.log.warning(
@@ -358,6 +366,9 @@ class USB6289(Instrument):
         counts = r["counts"]
         print(f"1 pps edges caught: {r['n_edges']} "
               f"(expected ~{r.get('n_edges_expected', '?')})")
+        if r.get("n_dropped"):
+            print(f"  {r['n_dropped']} latched value(s) discarded - not whole "
+                  f"atomic seconds (normally the end-of-acquisition one)")
         if r["n_edges"] < 2:
             print("  too few - is the 1 pps on pps.terminal, and did the "
                   "acquisition run long enough to span a second?")

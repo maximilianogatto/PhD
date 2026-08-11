@@ -92,6 +92,7 @@ class PPSCounter(InstrumentModule):
         self._offset = 0             # 2**32 added per rollover
 
         self._last_edges = None      # edges of the last completed record
+        self._last_edges_raw = None  # ...before clean_edges dropped any
 
         self.add_parameter(
             "terminal", label="1 pps terminal",
@@ -325,15 +326,43 @@ class PPSCounter(InstrumentModule):
         return out
 
     def set_last_edges(self, edges):
-        """Record the edge table of a completed record.
+        """Record the edge table of a completed record, artefacts removed.
 
         Called by whoever coordinated the acquisition (the root's
         acquire_with_pps, or long_run). Kept explicit rather than done inside
         collect(), because a streaming run collects many times per record and
         only the coordinator knows where a record ends.
+
+        Every acquisition ends with one latched value that is NOT an atomic
+        second: when the AI task stops the sample clock stops, the count
+        freezes, and one more value comes back carrying it. Left in, it
+        destroys the rate estimate - on a 60 s record a 16 ms straggler turned
+        +14 ppm into +16,403 ppm. clean_edges drops it; see postprocess.
+
+        The raw table is kept in last_edges_raw. Nothing is thrown away, and
+        edges.i64 is still written raw by long_run.
         """
-        self._last_edges = np.asarray(edges, dtype=np.int64)
+        from postprocess import clean_edges
+
+        self._last_edges_raw = np.asarray(edges, dtype=np.int64)
+        try:
+            scans_per_second = self.root_instrument.ai.actual_rate()
+        except Exception:
+            scans_per_second = None
+
+        self._last_edges, dropped = clean_edges(self._last_edges_raw,
+                                                scans_per_second)
+        if len(dropped):
+            self.log.info(
+                "dropped %d latched value(s) that are not whole atomic "
+                "seconds (%s) - normally just the end-of-acquisition one",
+                len(dropped), dropped.tolist()[:5])
         return self._last_edges
+
+    @property
+    def last_edges_raw(self):
+        """The last edge table before clean_edges, for forensics."""
+        return self._last_edges_raw
 
     # ================================================================ checks
     def check(self):

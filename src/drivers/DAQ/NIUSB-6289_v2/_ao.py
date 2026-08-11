@@ -60,6 +60,7 @@ shrinks the depth available to the waveform.
 
 from contextlib import contextmanager
 from functools import partial
+from multiprocessing import Value
 
 import numpy as np
 import nidaqmx
@@ -338,6 +339,149 @@ class AnalogOutput(InstrumentModule):
                 f"cannot be both. Free it first - daq.ao.{name}.role('off') - "
                 f"then set the waveform.")
         target.role("wave")
+    
+    def setup(self, channels_role: dict = None, shape: str = None,
+              freq: float = None, amp: float = None, offset: float = None,
+              rate: float = None, duty: float = None, trigger: str = None):
+        """Configure multiple channel roles and waveform parameters in one call.
+
+        For example:
+
+            daq.ao.setup(channels_role={"ao0": {"wave": 2.0}, "ao1": {"dc": 0.5}},
+                         shape="square", freq=100.0)
+
+        where `ao0` generates a 2.0 V amplitude waveform, and `ao1` is held at
+        a constant DC level of 0.5 V.
+
+        Parameters
+        ----------
+        channels_role
+            Mapping of channel short names (e.g. 'ao0') to role specifications.
+            Role specifications can be:
+            - A dict with role and value, e.g. {'wave': 2.0} (sets waveform amplitude)
+              or {'dc': 0.5} (sets DC voltage).
+            - A tuple, e.g. ('wave', 2.0) or ('dc', 0.5).
+            - A string, e.g. 'off'.
+        shape
+            Optional waveform shape ('square', 'sine', 'triangle', 'ramp').
+        freq
+            Optional frequency in Hz.
+        amp
+            Optional amplitude in Volts.
+        offset
+            Optional offset in Volts.
+        rate
+            Optional update rate in S/s.
+        duty
+            Optional square wave duty cycle (0.01 to 0.99).
+        trigger
+            Optional trigger terminal.
+
+        Returns
+        -------
+        ChannelList or list
+            Active channels in task order.
+        """
+        if channels_role is not None:
+            self._check_values(channels_role)
+
+        if shape is not None:
+            self.shape(shape)
+        if freq is not None:
+            self.freq(freq)
+        if amp is not None:
+            self.amp(amp)
+        if offset is not None:
+            self.offset(offset)
+        if rate is not None:
+            self.rate(rate)
+        if duty is not None:
+            self.duty(duty)
+        if trigger is not None:
+            self.trigger(trigger)
+
+        if channels_role is not None:
+            for channel_name, role_spec in channels_role.items():
+                channel = getattr(self, channel_name)
+                role, volts = self._parse_role_spec(channel_name, role_spec)
+
+                channel.role(role)
+                if role == "dc":
+                    channel.dc(volts)
+                elif role == "wave":
+                    if amp is None and volts is not None:
+                        self.amp(volts)
+
+        return self.active
+
+    def _parse_role_spec(self, channel_name: str, role_spec):
+        """Parse role_spec into (role, volts)."""
+        if isinstance(role_spec, dict):
+            if len(role_spec) != 1:
+                raise TypeError(
+                    f"Value for channel '{channel_name}' must be a dict with "
+                    f"one role and its value, e.g. {{'dc': 0.5}} or {{'wave': 2.0}}.")
+            role, volts = next(iter(role_spec.items()))
+        elif isinstance(role_spec, (tuple, list)):
+            if len(role_spec) == 0:
+                raise TypeError(f"Empty specification for channel '{channel_name}'.")
+            role = role_spec[0]
+            volts = role_spec[1] if len(role_spec) > 1 else 0.0
+        elif isinstance(role_spec, str):
+            role = role_spec
+            volts = 0.0
+        else:
+            raise TypeError(
+                f"Invalid specification for channel '{channel_name}': {role_spec!r}. "
+                f"Expected dict {{role: volts}}, tuple (role, volts), or role string.")
+        return role, volts
+
+    def _check_values(self, roles):
+        """Check that channels_role is valid, channel names exist, roles are valid,
+        and at most one channel is 'wave'."""
+        if not isinstance(roles, dict):
+            raise TypeError("channels_role must be a dict mapping channel names to roles.")
+
+        valid_channel_names = [c.short_name for c in self.channels]
+        wave_count = 0
+
+        for channel_name, role_spec in roles.items():
+            if channel_name not in valid_channel_names:
+                raise ValueError(
+                    f"'{channel_name}' is not an output; expected one of {valid_channel_names}")
+
+            role, volts = self._parse_role_spec(channel_name, role_spec)
+
+            if role not in ROLES:
+                raise ValueError(
+                    f"Invalid role '{role}' for channel '{channel_name}'. "
+                    f"Must be one of {ROLES}.")
+
+            if role == "dc":
+                self._check_voltage_limits(volts)
+            elif role == "wave":
+                wave_count += 1
+                if wave_count > 1:
+                    raise ValueError("Only one channel can have the 'wave' role.")
+                if volts is not None:
+                    if not isinstance(volts, (float, int)):
+                        raise TypeError(
+                            f"Waveform amplitude for '{channel_name}' must be a float or int, "
+                            f"got {type(volts).__name__}.")
+                    if not (0 <= volts <= AO_MAX):
+                        raise ValueError(
+                            f"Waveform amplitude {volts:g} V is out of range. "
+                            f"Must be between 0 V and {AO_MAX:g} V.")
+            elif role == "off":
+                if volts is not None:
+                    self._check_voltage_limits(volts)
+
+    def _check_voltage_limits(self, volts: float):
+        """Check that the voltage limits are within the allowed range."""
+        if not isinstance(volts, (float, int)):
+            raise TypeError(f"Voltage must be a float or int, got {type(volts).__name__}.")
+        if not (-AO_MAX <= volts <= AO_MAX):
+            raise ValueError(f"Voltage {volts:g} V is out of range. Must be between {-AO_MAX:g} V and {AO_MAX:g} V.")
 
     def _set(self, key, value):
         """Store a waveform setting, then rebuild the task if one is running.
@@ -354,11 +498,16 @@ class AnalogOutput(InstrumentModule):
         self._fifo = None
 
     def reapply(self):
-        """Rebuild the task, but only if one exists. Every setter calls this;
-        when nothing is running it is a no-op, so setting up an output costs
-        no hardware traffic until you start it."""
+        """Rebuild the task if running, or update static DC outputs if idle.
+
+        Every setter calls this: when generating, it updates the live task;
+        when idle, it performs an untimed on-demand write so DC levels take
+        effect immediately on the hardware pins.
+        """
         if self._task is not None:
             self._apply()
+        else:
+            self._write_static()
 
     # ================================================= sizes and shape maths
     def fifo_samples_now(self):
