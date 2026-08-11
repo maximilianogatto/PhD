@@ -740,6 +740,11 @@ class USB6289(Instrument):
         finally:
             if use_pps:
                 self.pps.stop()
+                # Whatever was still queued when the loop exited. stop() joins
+                # the reader, so this is complete. Without it the last few
+                # atomic seconds of every run were dropped on the floor - the
+                # edges were latched, they just never reached the file.
+                writer.write_edges(self.pps.collect())
             writer.close(n)
 
         if verbose:
