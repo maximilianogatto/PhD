@@ -68,8 +68,24 @@ class SegmentWriter:
         self.start_scan = 0          # global scan index this segment began at
         self.n = 0                   # scans written to the current segment
 
-        self._manifest = open(self.outdir / "manifest.jsonl", "a")
-        self._edges = open(self.outdir / "edges.i64", "ab")
+        # A second run in the same directory would append to the manifest
+        # while restarting BOTH the segment index and the scan numbering at 0.
+        # The result reads back silently wrong: load_segment(dir, 0) finds the
+        # first run's entry, start_sample values collide, and edges.i64 becomes
+        # two runs' atomic seconds concatenated into one table. Refuse instead:
+        # a new directory per run costs nothing, and there is no merge of two
+        # recordings that would be correct.
+        manifest_path = self.outdir / "manifest.jsonl"
+        if manifest_path.exists():
+            raise FileExistsError(
+                f"{manifest_path} already exists - {self.outdir} holds a "
+                f"previous run. Appending would restart segment indices and "
+                f"scan numbering at 0 on top of the old ones, so the manifest "
+                f"and edges.i64 would silently describe two runs at once. Use "
+                f"a new directory.")
+
+        self._manifest = open(manifest_path, "x")
+        self._edges = open(self.outdir / "edges.i64", "xb")
         self.rotate(0)               # open the first segment
 
     # ---------------------------------------------------------------- log

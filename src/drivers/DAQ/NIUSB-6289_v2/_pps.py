@@ -63,6 +63,8 @@ from qcodes.instrument import InstrumentModule
 from qcodes.validators import Enum
 
 COUNTER_BITS = 32           # rolls over every 47.7 h at 25 kS/s
+DRAIN_ERROR_BACKOFF = 1.0   # s, after a counter read that failed immediately
+MAX_DRAIN_ERRORS = 30       # consecutive failures before the reader gives up
 
 
 class PPSCounter(InstrumentModule):
@@ -231,20 +233,52 @@ class PPSCounter(InstrumentModule):
         task = self._task
 
         def drain():
+            consecutive_errors = 0
             while not self._halt.is_set():
                 try:
                     # 1.5 s > the 1 s between edges, so a timeout is rare and
                     # only serves to re-check the halt flag.
                     value = task.read(number_of_samples_per_channel=1, timeout=1.5)
-                except nidaqmx.errors.DaqError:
+                except nidaqmx.errors.DaqError as e:
+                    # A read timeout is normal and costs 1.5 s, so looping
+                    # straight back is right for it. Anything that fails
+                    # IMMEDIATELY - a disconnected card, an aborted task -
+                    # would spin this thread at 100% CPU for the rest of a
+                    # week-long run, so back off and eventually give up. The
+                    # run itself continues; it just stops getting edges, which
+                    # the manifest and n_edges will show.
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_DRAIN_ERRORS:
+                        self.log.error(
+                            "1 pps counter failed %d times in a row (%s); "
+                            "giving up on edges for this run",
+                            consecutive_errors, e)
+                        return
+                    self._halt.wait(DRAIN_ERROR_BACKOFF)
                     continue
                 except Exception:              # task closed under us
                     return
+                consecutive_errors = 0
                 self._q.put(int(np.asarray(value).ravel()[0]))
 
-        task.start()
-        self._thread = threading.Thread(target=drain, daemon=True, name=f"{self.full_name}-drain")
-        self._thread.start()
+        # Everything from here can fail with the task built and the counter
+        # claimed, so unwind both rather than leaving the module wedged in a
+        # state where start() says "already running" and only stop() clears it.
+        try:
+            task.start()
+            self._thread = threading.Thread(target=drain, daemon=True,
+                                            name=f"{self.full_name}-drain")
+            self._thread.start()
+        except Exception:
+            self._halt.set()
+            self._thread = None
+            try:
+                task.close()
+            except Exception:
+                pass
+            self._task = None
+            self.root_instrument.release_counter(self.counter())
+            raise
 
     def stop(self):
         """Stop the reader thread and close the counter task.

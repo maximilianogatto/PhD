@@ -269,9 +269,13 @@ class USB6289(Instrument):
         try:
             data = self.ai.acquire()
         finally:
-            self.pps.stop()            # joins, so nothing is left in flight
-        edges = self.pps.set_last_edges(self.pps.collect())
-        return data, edges
+            # Collect inside the finally, not after it: stop() joins the
+            # reader, so the queue is complete either way, and on a failed
+            # acquisition the edges that WERE caught still say when the
+            # failure happened. Draining also leaves nothing behind.
+            self.pps.stop()
+            self.pps.set_last_edges(self.pps.collect())
+        return data, self.pps.last_edges
 
     def clock_check(self, seconds=None, verbose=True):
         """Measure the board's clock against the rubidium 1 pps.

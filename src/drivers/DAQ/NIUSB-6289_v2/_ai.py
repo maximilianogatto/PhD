@@ -245,7 +245,12 @@ class AIChannel(InstrumentChannel):
             "trace", parameter_class=AITrace,
             label=f"Voltage {name}", unit="V",
             setpoints=(parent.time_axis,),
-            vals=Arrays(shape=(parent.n_samples,)))
+            vals=Arrays(shape=(parent.n_samples,)),
+            # A snapshot must never trigger an acquisition. QCoDeS snapshots
+            # the station at the start of every Measurement, and a snapshot
+            # with update=True gets every gettable parameter - which here
+            # would measure AND consume the ledger before the run began.
+            snapshot_value=False)
 
     @property
     def physical(self):
