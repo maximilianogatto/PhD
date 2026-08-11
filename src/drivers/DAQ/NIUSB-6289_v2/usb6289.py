@@ -600,9 +600,9 @@ class USB6289(Instrument):
             print(f"  {note}")
 
     # ============================================================ long runs
-    def long_run(self, outdir, hours=None, rotate_minutes=60, restart=True,
+    def long_run(self, outdir, hours=None, rotate_minutes=None, restart=True,
                  background=False, live_decimate=100, live_seconds=60,
-                 to_hdf5=False, verbose=True):
+                 to_hdf5=False, require_pps=True, verbose=True):
         """Record every enabled AI channel continuously, for hours or weeks.
 
         See _longrun.py for the on-disk layout and why it is that way. Stop
@@ -617,11 +617,14 @@ class USB6289(Instrument):
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
 
-        if not self.pps.terminal():
+        use_pps = bool(self.pps.terminal())
+        if not use_pps and require_pps:
             raise ValueError(
                 "pps.terminal is not set. Over a day the board's clock drifts "
                 "~4 s; the 1 pps edges are what make the time axis meaningful. "
-                "Set daq.pps.terminal('/Dev1/PFI9') (screw terminal 83).")
+                "Set daq.pps.terminal('/Dev1/PFI9') (screw terminal 83), or "
+                "pass require_pps=False if you are testing on the bench and "
+                "do not care about the time axis.")
         if not self.ai.active:
             raise ValueError(
                 "no analog input is enabled - there is nothing to record. "
@@ -634,13 +637,18 @@ class USB6289(Instrument):
                             rotate_minutes=rotate_minutes, restart=restart,
                             background=False, live_decimate=live_decimate,
                             live_seconds=live_seconds, to_hdf5=to_hdf5,
-                            verbose=verbose))
+                            require_pps=require_pps, verbose=verbose))
             thread.start()
             return LongRun(self, thread, outdir)
 
         channels = [c.short_name for c in self.ai.active]
         rate, conv_rate = self.ai.actual_rate(), self.ai.conv_rate()
-        rotate_scans = int(round(rotate_minutes * 60 * rate))
+        # None = never rotate: ONE file per channel for the whole run.
+        # Rotation exists so a closed segment can be archived or compressed
+        # while the run continues, and so a filesystem problem costs one
+        # segment instead of everything. Neither matters for a short run.
+        rotate_scans = (None if rotate_minutes is None
+                        else int(round(rotate_minutes * 60 * rate)))
         stop_scans = None if hours is None else int(round(hours * 3600 * rate))
 
         (outdir / "run.json").write_text(json.dumps(self.describe(), indent=2, default=str))
@@ -648,8 +656,10 @@ class USB6289(Instrument):
         if verbose:
             gb_day = rate * 4 * len(channels) * 86400 / 1e9
             print(f"long run -> {outdir}")
+            rotation = ("one file per channel" if rotate_minutes is None
+                        else f"rotating every {rotate_minutes} min")
             print(f"  {rate:,.3f} S/s x {len(channels)} channel(s) "
-                  f"{channels}, float32, rotating every {rotate_minutes} min")
+                  f"{channels}, float32, {rotation}")
             print(f"  {gb_day:.1f} GB/day, {gb_day * 7:.0f} GB/week")
             print("  interrupt to stop cleanly")
 
@@ -671,13 +681,17 @@ class USB6289(Instrument):
                     "wall": time.time()})
 
         n = 0
-        self.pps.start()          # before the AI task: it counts ai/SampleClock
+        if use_pps:
+            self.pps.start()      # before the AI task: it counts ai/SampleClock
+        elif verbose:
+            print("  NO 1 pps - the time axis will be the board's own clock")
         try:
             while stop_scans is None or n < stop_scans:
                 try:
                     for _, chunk in self.ai.acquire_chunks(duration=None):
                         n += writer.write(chunk, n)
-                        writer.write_edges(self.pps.collect())
+                        if use_pps:
+                            writer.write_edges(self.pps.collect())
 
                         if live_decimate:
                             self._append_live(chunk, channels[0], n,
@@ -713,7 +727,8 @@ class USB6289(Instrument):
                     continue           # back into the acquisition loop
                 break                  # the chunk loop ended on its own terms
         finally:
-            self.pps.stop()
+            if use_pps:
+                self.pps.stop()
             writer.close(n)
 
         if verbose:

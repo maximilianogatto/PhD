@@ -75,7 +75,7 @@ def channels_of(outdir):
     return []
 
 
-def load_segment(outdir, index, channel=None):
+def load_segment(outdir, index, channel=None, mmap=False):
     """(global scan indices, signal) for one channel of one segment.
 
     channel=None picks the first channel of the run, which is the only one
@@ -90,7 +90,11 @@ def load_segment(outdir, index, channel=None):
     entry = next(e for e in manifest
                  if e.get("index") == index and "file" in e
                  and (channel is None or e.get("channel") == channel))
-    y = np.fromfile(outdir / entry["file"], dtype=np.float32)
+    path = outdir / entry["file"]
+    # mmap=True leaves the samples on disk and pages in only what you touch,
+    # so an 8 GB segment plots without 8 GB of RAM. Slice it like an array.
+    y = (np.memmap(path, dtype=np.float32, mode="r") if mmap
+         else np.fromfile(path, dtype=np.float32))
     i0 = entry["start_sample"]
     return np.arange(i0, i0 + len(y), dtype=np.int64), y
 

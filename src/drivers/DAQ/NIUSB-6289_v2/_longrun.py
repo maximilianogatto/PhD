@@ -53,12 +53,12 @@ class SegmentWriter:
     log - lives here.
     """
 
-    def __init__(self, outdir, channels, rate, rotate_scans,
+    def __init__(self, outdir, channels, rate, rotate_scans=None,
                  convert_q=None, verbose=True):
         self.outdir = Path(outdir)
         self.channels = list(channels)
         self.rate = rate
-        self.rotate_scans = rotate_scans
+        self.rotate_scans = rotate_scans     # None = one file per channel
         self.convert_q = convert_q
         self.verbose = verbose
 
@@ -153,7 +153,7 @@ class SegmentWriter:
             length = len(values)
         self.n += length
 
-        if self.n >= self.rotate_scans:
+        if self.rotate_scans is not None and self.n >= self.rotate_scans:
             self.rotate(scan + length)
         return length
 
