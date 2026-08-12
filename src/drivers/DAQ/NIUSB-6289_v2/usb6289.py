@@ -188,9 +188,8 @@ class USB6289(Instrument):
         # --- long_run state, read from other threads while a run is going
         self._stop = threading.Event()
         self._run_state = {}
-        self._live = deque()
-        self._live_decimate = 100
-        self._live_rate = None
+        self._live = deque()         # (index, value) blocks, see _append_live
+        self._live_rate = None       # scans/s, set when a run starts
 
         self.add_submodule("ai", AnalogInput(self))
         self.add_submodule("pps", PPSCounter(self))
@@ -643,6 +642,23 @@ class USB6289(Instrument):
         background=True runs it in a thread and returns a LongRun handle, so
         this process can also drive the OPX. The DAQ and QM each drain their
         own buffer; neither waits on the other.
+
+        live_decimate and live_seconds size the little in-RAM buffer that
+        live_preview() reads - they do not affect what is recorded in any way.
+
+            live_decimate   how many raw scans go into one summary block. Each
+                            block contributes TWO points, its min and its max,
+                            so the buffer holds 2/live_decimate of the data:
+                            at 100, 500 points per second instead of 25,000.
+                            Smaller means a finer picture and more memory.
+                            0 disables the live buffer entirely.
+            live_seconds    how far back it reaches. The deque holds
+                            live_seconds/0.2 chunks and throws away the oldest,
+                            so memory is fixed no matter how long the run is -
+                            60 s at 25 kS/s is about 240 kB.
+
+        The buffer is a HEALTH CHECK, not a data path: one channel, summarised.
+        To look at the measurement, read the files with livescope.
         """
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
@@ -693,9 +709,12 @@ class USB6289(Instrument):
             print("  interrupt to stop cleanly")
 
         # Rolling decimated view for live plotting; one entry per chunk.
-        chunk_seconds = max(0.001, (rate // 5) / rate) # 5 chunks/s, but never less than 1 ms
-        self._live = deque(maxlen=max(1, int(live_seconds / chunk_seconds))) # number of chunks to hold in live
-        self._live_decimate = live_decimate # decimation factor for live preview
+        # One deque entry per acquisition chunk, so the length has to be in
+        # chunks. Use the SAME chunk size acquire_chunks computes, or the
+        # buffer holds the wrong number of seconds at low rates.
+        chunk_scans = max(100, int(rate // 5))          # ~0.2 s of data
+        chunk_seconds = chunk_scans / rate
+        self._live = deque(maxlen=max(1, int(live_seconds / chunk_seconds)))
         self._live_rate = rate
 
         # Convert to HDF5 in a background thread, so the acquisition is not slowed
