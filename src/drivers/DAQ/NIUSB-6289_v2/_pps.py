@@ -348,6 +348,8 @@ class PPSCounter(InstrumentModule):
         try:
             scans_per_second = self.root_instrument.ai.actual_rate()
         except Exception:
+            # clean_edges falls back to the median gap, so a failure to read
+            # the rate no longer means no filtering at all.
             scans_per_second = None
 
         self._last_edges, dropped = clean_edges(self._last_edges_raw,

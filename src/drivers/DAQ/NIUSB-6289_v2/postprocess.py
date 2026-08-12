@@ -25,7 +25,7 @@ import numpy as np
 
 # =============== Time to atomic seconds ==========================
 
-def clean_edges(edges, scans_per_second, tol=0.05):
+def clean_edges(edges, scans_per_second=None, tol=0.05):
     """Drop latched counter values that cannot be atomic seconds.
 
     Returns (kept, dropped). An atomic second is one second: the gap between
@@ -49,17 +49,38 @@ def clean_edges(edges, scans_per_second, tol=0.05):
     tighter than the artefact it rejects.
     """
     edges = np.asarray(edges, dtype=np.int64)
-    if len(edges) < 2 or not scans_per_second:
+    if len(edges) < 3:
         return edges, np.zeros(0, dtype=np.int64)
 
-    keep, dropped = [0], []
-    for i in range(1, len(edges)):
-        seconds = (edges[i] - edges[keep[-1]]) / scans_per_second
-        if seconds < 0.5 or abs(seconds - round(seconds)) > tol:
-            dropped.append(i)
-        else:
-            keep.append(i)
-    return edges[keep], edges[dropped]
+    if not scans_per_second:
+        # The MEDIAN gap is one second's worth of scans, and it stays that
+        # even with artefacts at both ends - which is the point. Defaulting to
+        # this rather than skipping the filter matters: an earlier version
+        # returned the table unfiltered when the rate could not be read, so a
+        # failure to look up the rate turned silently into no cleaning at all.
+        scans_per_second = float(np.median(np.diff(edges)))
+        if scans_per_second <= 0:
+            return edges, np.zeros(0, dtype=np.int64)
+
+    def sweep(anchor):
+        """Greedy pass keeping edges a whole number of seconds apart."""
+        keep = [anchor]
+        for i in range(anchor + 1, len(edges)):
+            seconds = (edges[i] - edges[keep[-1]]) / scans_per_second
+            if seconds >= 0.5 and abs(seconds - round(seconds)) <= tol:
+                keep.append(i)
+        return keep
+
+    # Anchoring on edge 0 assumes edge 0 is real. It usually is - but the
+    # counter can emit an initial value at task start, before the AI clock has
+    # produced a single scan, and then the FIRST edge is the artefact. Sweeping
+    # from both candidates and keeping the better result costs one extra pass
+    # and removes the assumption. (An acquisition triggered off the same line
+    # as the 1 pps produces exactly this: two values at scan 0.)
+    best = max((sweep(0), sweep(1)), key=len)
+    kept = set(best)
+    dropped = [i for i in range(len(edges)) if i not in kept]
+    return edges[best], edges[dropped]
 
 
 def _atomic_seconds(edges, scans_per_second=None):
@@ -87,6 +108,14 @@ def _atomic_seconds(edges, scans_per_second=None):
     """
     edges = np.asarray(edges, dtype=np.float64)
     gaps = np.diff(edges)
+    if np.any(gaps <= 0):
+        # Two latched values at the same scan cannot both be atomic seconds,
+        # and numbering them 0 and 1 shifts the whole axis by a second - which
+        # is exactly what a duplicate at scan 0 did before clean_edges ran.
+        # Raise rather than guess: np.interp with repeated x is ambiguous too.
+        raise ValueError(
+            f"edge table is not strictly increasing ({int((gaps <= 0).sum())} "
+            f"repeated or decreasing value(s)) - run clean_edges first")
     if scans_per_second is None:
         scans_per_second = np.median(gaps)
     steps = np.rint(gaps / scans_per_second)

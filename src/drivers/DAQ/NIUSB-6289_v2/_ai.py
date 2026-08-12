@@ -161,7 +161,10 @@ class AIAtomTimeAxis(Parameter):
             raise RuntimeError(
                 "no 1 pps edges from the last acquisition - use "
                 "daq.acquire_with_pps() and check pps.terminal is set")
-        return times_from_edges(np.arange(ai.n_samples()), edges)
+        # Pass the rate so the edge table is filtered here too, not only
+        # when pps.set_last_edges happened to do it.
+        return times_from_edges(np.arange(ai.n_samples()), edges,
+                                scans_per_second=ai.actual_rate())
 
 
 class AITrace(ParameterWithSetpoints):
