@@ -15,6 +15,19 @@ The on-disk layout written by long_run() is multichannel from v2 on:
 A scan index counts sample clock ticks, not conversions, so it means the same
 thing however many channels are enabled - which is why the edge table is
 shared by all of them and lives in one file.
+
+RAW ON DISK, INTERPRETED ON READ. Nothing written by long_run has been
+filtered, corrected or cleaned. The .f32 is what DAQmx returned; edges.i64
+holds every value the counter produced, including the duplicate it emits at
+task start and the frozen count it emits when the AI clock stops. A recording
+that cannot be re-taken must not be stored already interpreted - if the
+interpretation turns out to be wrong, and it did, the raw file is what lets
+you fix it after the fact rather than repeat a week of measurement.
+
+So the artefacts live in the file and are removed HERE, by default:
+times_from_edges cleans unless you pass clean=False, and edge_report says
+what was discarded. That is the right way round - a mistake in this file is
+one you can correct tomorrow.
 """
 
 import json
@@ -123,7 +136,7 @@ def _atomic_seconds(edges, scans_per_second=None):
     return np.concatenate([[0.0], np.cumsum(steps)])
 
 
-def times_from_edges(sample_idx, edges, scans_per_second=None):
+def times_from_edges(sample_idx, edges, scans_per_second=None, clean=True):
     """Seconds since the first 1 pps edge, for global scan indices.
 
     Edge k is exactly k atomic seconds after edge 0, so this interpolates
@@ -138,12 +151,21 @@ def times_from_edges(sample_idx, edges, scans_per_second=None):
     everything before the first edge collapsed to 0. This is the version that
     was commented out below it, and it matches what the docstrings claim.
 
-    Pass scans_per_second (daq.ai.actual_rate(), or the nominal_rate in the
-    manifest) to run clean_edges first. edges.i64 is written raw and lossless,
-    so the end-of-acquisition artefact is in the file and has to be filtered
-    here rather than at write time.
+    RAW ON DISK, FILTERED ON READ. edges.i64 holds every value the counter
+    ever produced - the duplicate at task start, the straggler at the end, all
+    of it - because a recording you cannot re-take must never be stored
+    already interpreted. The filtering therefore has to happen here, and it is
+    the DEFAULT rather than something you remember to ask for: an earlier
+    version only cleaned when scans_per_second was passed, and forgetting it
+    silently shifted a 300 s record to 1.000 .. 301.427 s.
+
+    clean=False returns the unfiltered interpretation, for when you are
+    investigating the edge table itself rather than using it. scans_per_second
+    (daq.ai.actual_rate(), or nominal_rate from the manifest) makes the filter
+    exact; without it the median gap is used, which is the same answer unless
+    more than half the edges are artefacts.
     """
-    if scans_per_second:
+    if clean:
         edges, _ = clean_edges(edges, scans_per_second)
 
     edges = np.asarray(edges, dtype=np.float64)
@@ -161,6 +183,58 @@ def times_from_edges(sample_idx, edges, scans_per_second=None):
         t[after] = (len(edges) - 1) + \
                    (idx[after] - edges[-1]) / (edges[-1] - edges[-2])
     return t
+
+def edge_report(edges, nominal_rate=None, verbose=True):
+    """Is the 1 pps table of this run sound? Returns a dict, prints a summary.
+
+    Run it before trusting a time axis. It says what was discarded and why,
+    how many atomic seconds were MISSED (a gap of 2 s or more, which is real
+    and kept), and what the board's clock did against the rubidium.
+
+        manifest, edges = load_long_run(outdir)
+        edge_report(edges, manifest[0]["nominal_rate"])
+    """
+    edges = np.asarray(edges, dtype=np.int64)
+    kept, dropped = clean_edges(edges)
+    report = {"n_raw": len(edges), "n_kept": len(kept),
+              "n_dropped": len(dropped), "dropped": dropped,
+              "measured_rate": None, "ppm": None, "seconds_per_day": None,
+              "atomic_seconds": None, "n_missed": 0}
+
+    if len(kept) >= 2:
+        steps = _atomic_seconds(kept)
+        report["atomic_seconds"] = float(steps[-1])
+        report["n_missed"] = int((np.diff(steps) > 1).sum())
+        # Scans per atomic second across the WHOLE run, not the mean of the
+        # gaps: the endpoints are each quantised to one scan, so spanning the
+        # run divides that error by the number of seconds in it.
+        report["measured_rate"] = float((kept[-1] - kept[0]) / steps[-1])
+        if nominal_rate:
+            ppm = (nominal_rate - report["measured_rate"]) \
+                / report["measured_rate"] * 1e6
+            report["ppm"] = ppm
+            report["seconds_per_day"] = abs(ppm) * 0.0864
+
+    if verbose:
+        print(f"1 pps: {report['n_kept']:,} usable of {report['n_raw']:,} "
+              f"latched values")
+        if report["n_dropped"]:
+            shown = dropped[:6].tolist()
+            print(f"  discarded {report['n_dropped']}: {shown}"
+                  f"{' ...' if report['n_dropped'] > 6 else ''}")
+            print(f"  (not whole atomic seconds - normally the counter's "
+                  f"start value and the end-of-run one)")
+        if report["atomic_seconds"] is not None:
+            print(f"  spans {report['atomic_seconds']:,.0f} atomic seconds")
+            if report["n_missed"]:
+                print(f"  {report['n_missed']} MISSED edge(s) - kept as gaps, "
+                      f"the numbering accounts for them")
+            print(f"  true rate {report['measured_rate']:,.3f} scans/atomic s")
+            if report["ppm"] is not None:
+                print(f"  clock error {report['ppm']:+.2f} ppm "
+                      f"-> {report['seconds_per_day']:.2f} s/day")
+    return report
+
 
 # ======================================================= long-run read-back
 def load_long_run(outdir):

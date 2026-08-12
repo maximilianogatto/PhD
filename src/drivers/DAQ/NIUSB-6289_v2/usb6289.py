@@ -2,7 +2,9 @@
 QCoDeS driver for the NI USB-6289 - v2, split into instrument submodules.
 
 STATUS. Everything from v1 is ported: the three subsystems, long_run() and
-wiring(). Nothing has been run against real hardware yet.
+wiring(). Exercised on the real board: DC levels, waveform generation,
+clock_check against the FS725 rubidium, and a 300 s triggered acquisition
+with the 1 pps, the AI trigger and the AO trigger all on PFI8.
 
 The organisation of the whole driver - what each class is and why - is
 documented on the USB6289 class below. The short version: the v1 driver
@@ -680,16 +682,13 @@ class USB6289(Instrument):
         self._live_decimate = live_decimate
         self._live_rate = rate
 
+        # Convert to HDF5 in a background thread, so the acquisition is not slowed
         convert_q = queue.Queue() if to_hdf5 else None
         if convert_q is not None:
-            threading.Thread(target=_hdf5_worker, args=(convert_q, verbose),
-                             daemon=True).start()
+            threading.Thread(target=_hdf5_worker, args=(convert_q, verbose),daemon=True).start()
 
-        writer = SegmentWriter(outdir, channels, rate, rotate_scans,
-                               convert_q=convert_q, verbose=verbose)
-        writer.log({"event": "start", "channels": channels,
-                    "nominal_rate": rate, "conv_rate": conv_rate,
-                    "wall": time.time()})
+        writer = SegmentWriter(outdir, channels, rate, rotate_scans,convert_q=convert_q, verbose=verbose)
+        writer.log({"event": "start", "channels": channels, "nominal_rate": rate, "conv_rate": conv_rate, "wall": time.time()})
 
         n = 0
         if use_pps:
