@@ -264,6 +264,14 @@ class LiveScope:
 
     # ---------------------------------------------------------------- draw
     def _draw(self):
+        """Redraw the window into the SAME axes.
+
+        ax.clear() every time, on purpose: without it each frame would add
+        another Line2D to the axes and the figure would get slower and
+        heavier for the length of the run - a very common way to make a live
+        plot grind to a halt after a few minutes. clear() is cheap here
+        because there are only a few artists.
+        """
         t, low, high, info = self.data()
         ax = self._ax
         ax.clear()
@@ -284,16 +292,58 @@ class LiveScope:
         ax.set_xlim(t[0], t[-1] if len(t) > 1 else t[0] + self.width)
         self._fig.canvas.draw_idle()
 
-    def show(self, seconds=None):
-        """Open the figure and keep it updating.
+    def _open(self):
+        import matplotlib.pyplot as plt
+        if self._fig is None:
+            self._fig, self._ax = plt.subplots(figsize=(12, 4))
+        return self._fig
 
-        seconds=None follows until the run ends or you interrupt. In a
-        notebook with ipywidgets installed you get position, width and follow
-        controls; without it, use goto/pan/zoom from another cell.
+    def step(self):
+        """Draw the current window ONCE. For driving from your own loop."""
+        self._open()
+        self._draw()
+        self._flush(pause=False)
+        return self
+
+    def _flush(self, pause=True):
+        """Get the figure onto the screen, whichever backend is in use.
+
+        This is the part that decides whether "live" works at all:
+
+          inline (the Jupyter DEFAULT) has no GUI event loop, so plt.pause()
+          redraws nothing - the cell just blocks and you see one figure when
+          it finishes. The figure has to be re-DISPLAYED each time, with the
+          previous output cleared.
+
+          widget (ipympl) / qt / tk have an event loop, and plt.pause() both
+          runs it and sleeps. This is the one worth installing: it gives real
+          pan and zoom, and it does not flicker.
         """
+        import matplotlib
         import matplotlib.pyplot as plt
 
-        self._fig, self._ax = plt.subplots(figsize=(12, 4))
+        if "inline" in matplotlib.get_backend().lower():
+            from IPython.display import clear_output, display
+            clear_output(wait=True)          # wait=True: no flicker
+            display(self._fig)
+            if pause:
+                time.sleep(self.refresh)
+        else:
+            self._fig.canvas.draw_idle()
+            plt.pause(self.refresh if pause else 0.001)
+
+    def show(self, seconds=None):
+        """Open the figure and keep it updating until interrupted.
+
+        seconds=None follows until you interrupt the kernel. Works on the
+        inline backend, but `%matplotlib widget` is much better - see _flush.
+
+        If you would rather drive the loop yourself, use step():
+
+            while run.alive:
+                scope.step()
+        """
+        self._open()
         try:
             self._controls()
         except ImportError:
@@ -303,10 +353,11 @@ class LiveScope:
         try:
             while seconds is None or time.time() - started < seconds:
                 self._draw()
-                plt.pause(self.refresh)
+                self._flush()
         except KeyboardInterrupt:
             pass
         self._draw()
+        self._flush(pause=False)
         return self
 
     def _controls(self):
