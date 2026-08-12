@@ -189,7 +189,7 @@ class SegmentWriter:
         indices, and all channels are on the same scan clock."""
         if len(edges):
             edges.astype(np.int64, copy=False).tofile(self._edges)
-            self._edges.flush()
+            self._edges.flush() # flush so the tail of the file can be read while it is still being written
 
     def close(self, scan):
         """Close the final segment and every file this writer owns."""

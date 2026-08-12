@@ -784,10 +784,33 @@ class USB6289(Instrument):
         return outdir
 
     def _append_live(self, chunk, channel, n_after, decimate):
-        """Keep a decimated slice of one channel for live_preview()."""
-        n_before = n_after - len(chunk[channel])
-        offset = (-n_before) % decimate       # keep a global decimation grid
-        self._live.append((n_before + offset, chunk[channel][offset::decimate].copy()))
+        """Keep a decimated summary of one channel for live_preview().
+
+        The MIN and MAX of each block - two points per block - not every Nth
+        sample. Striding is undersampling: at decimate=100 a 25 kS/s stream
+        becomes 250 S/s, so a 100 Hz square wave arrives with 2.5 samples per
+        period and renders as ragged nonsense with the wrong duty cycle, while
+        the data on disk is perfect. The extremes of each block cost the same
+        to compute and cannot lie about the envelope - the same reason
+        livescope draws min/max columns.
+
+        The two points are placed at the start and middle of their block, so
+        the line spans the block instead of jumping between neighbours.
+        """
+        y = chunk[channel]
+        n_before = n_after - len(y)
+        n_blocks = len(y) // decimate
+        if n_blocks == 0:
+            return
+        block = y[:n_blocks * decimate].reshape(n_blocks, decimate)
+
+        values = np.empty(n_blocks * 2, dtype=np.float32)
+        values[0::2] = block.min(axis=1)
+        values[1::2] = block.max(axis=1)
+
+        starts = n_before + np.arange(n_blocks) * decimate
+        index = np.repeat(starts, 2) + np.tile([0, decimate // 2], n_blocks)
+        self._live.append((index, values))
 
     def live_preview(self, channel=None):
         """(seconds, volts) for the recent past of a running long_run().
@@ -824,13 +847,11 @@ class USB6289(Instrument):
         copies the deque, and the writer only appends to it.
         """
         items = list(self._live)
-        if not items:
+        if not items or not self._live_rate:
             return np.array([]), np.array([])
-        decimate, rate = self._live_decimate, self._live_rate
-        index = np.concatenate([i0 + np.arange(len(a)) * decimate
-                                for i0, a in items])
-        values = np.concatenate([a for _, a in items])
-        return index / rate, values
+        index = np.concatenate([i for i, _ in items])
+        values = np.concatenate([v for _, v in items])
+        return index / self._live_rate, values
 
     # ========================================================== metadata
     def describe(self):
