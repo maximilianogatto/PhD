@@ -710,18 +710,12 @@ class AnalogInput(InstrumentModule):
         n_target = self.n_samples()
         chunks = []
 
-        # start_armed=True. This is ONE task, so the callback fires once, on
-        # the line after task.start() - exactly where it fired when this loop
-        # was written out here. Leaving it at the default would mean _on_armed
-        # never fires from acquire() at all, and the OPX would emit its marker
-        # into a board that was never told to wait for it.
-        #
-        # And no `break`: acquire_chunks already stops once it has `duration`
+        # No `break`: acquire_chunks already stops once it has `duration`
         # worth, so letting it END is not laziness - a generator abandoned
         # mid-yield keeps its task open until the garbage collector notices,
         # whereas one that finishes runs its own finally here and now.
-        for _, chunk in self.acquire_chunks(duration=self.duration(),
-                                            start_armed=True):
+        # start_armed defaults to True, which is what one task wants.
+        for _, chunk in self.acquire_chunks(duration=self.duration()):
             chunks.append(chunk)
 
         if not chunks:
@@ -737,8 +731,15 @@ class AnalogInput(InstrumentModule):
         self._generation += 1
         return self._last
 
-    def acquire_chunks(self, duration=None, start_armed=False):
+    def acquire_chunks(self, duration=None, start_armed=True):
         """Yield (i0, {channel: array}) as each chunk arrives, constant memory.
+
+        start_armed defaults to TRUE: one call, one task, so the _on_armed
+        callback fires - which is what you want everywhere except a restart.
+        The default is deliberately the SAFE one. It was False for a while and
+        silently disabled the callback in every caller that forgot to pass it,
+        twice; a default that turns a feature off keeps doing that. Only
+        long_run passes False, and only for the tasks it rebuilds after a gap.
 
         i0    scan index of the chunk's first sample, common to every channel,
               so t = (i0 + arange(len)) / actual_rate()
@@ -768,8 +769,8 @@ class AnalogInput(InstrumentModule):
 
             n_done = 0  # number of samples done so far, per channel
             task.start()                       # arms; waits if triggered
-            if self._on_armed is not None:
-                if start_armed: self._on_armed();
+            if start_armed and self._on_armed is not None:
+                self._on_armed()               # e.g. qm.execute(prog)
 
             try:
                 while n_target is None or n_done < n_target:
