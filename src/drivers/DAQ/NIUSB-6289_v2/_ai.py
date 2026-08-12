@@ -707,16 +707,33 @@ class AnalogInput(InstrumentModule):
         Use acquire_chunks() when the record is too long for RAM, or when you
         want to see it as it arrives. Use acquire() when you want the record.
         """
-        # use adquire chunks to get the data in chunks and then concatenate them to get the full record
         n_target = self.n_samples()
-        data = []
-        for i0, chunk in self.acquire_chunks(duration=self.duration()):
-            data.append(chunk)
-            if i0 + len(chunk[next(iter(chunk))]) >= n_target:
-                break
-        # concatenate the chunks into one array, and trim to the requested length
-        data = {ch: np.concatenate([chunk[ch] for chunk in data])[:n_target] for ch in data[0]}
-        self._last = data
+        chunks = []
+
+        # start_armed=True. This is ONE task, so the callback fires once, on
+        # the line after task.start() - exactly where it fired when this loop
+        # was written out here. Leaving it at the default would mean _on_armed
+        # never fires from acquire() at all, and the OPX would emit its marker
+        # into a board that was never told to wait for it.
+        #
+        # And no `break`: acquire_chunks already stops once it has `duration`
+        # worth, so letting it END is not laziness - a generator abandoned
+        # mid-yield keeps its task open until the garbage collector notices,
+        # whereas one that finishes runs its own finally here and now.
+        for _, chunk in self.acquire_chunks(duration=self.duration(),
+                                            start_armed=True):
+            chunks.append(chunk)
+
+        if not chunks:
+            raise RuntimeError(
+                f"no data: {self.duration():g} s at "
+                f"{self._verify()[0]:,.0f} S/s produced no chunks")
+
+        # Trim: the last read is a whole chunk, so it can overshoot n_target
+        # by up to chunk-1 scans. Every channel is trimmed to the same length,
+        # which is what the trace parameters' Arrays(shape=(n_samples,))
+        # validator expects.
+        self._last = {name: np.concatenate([c[name] for c in chunks])[:n_target] for name in chunks[0]}
         self._generation += 1
         return self._last
 
