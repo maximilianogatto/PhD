@@ -677,8 +677,7 @@ class USB6289(Instrument):
         # Rotation exists so a closed segment can be archived or compressed
         # while the run continues, and so a filesystem problem costs one
         # segment instead of everything. Neither matters for a short run.
-        rotate_scans = (None if rotate_minutes is None
-                        else int(round(rotate_minutes * 60 * rate)))
+        rotate_scans = (None if rotate_minutes is None else int(round(rotate_minutes * 60 * rate)))
         stop_scans = None if hours is None else int(round(hours * 3600 * rate))
 
         (outdir / "run.json").write_text(json.dumps(self.describe(), indent=2, default=str))
@@ -694,9 +693,9 @@ class USB6289(Instrument):
             print("  interrupt to stop cleanly")
 
         # Rolling decimated view for live plotting; one entry per chunk.
-        chunk_seconds = max(0.001, (rate // 5) / rate)
-        self._live = deque(maxlen=max(1, int(live_seconds / chunk_seconds)))
-        self._live_decimate = live_decimate
+        chunk_seconds = max(0.001, (rate // 5) / rate) # 5 chunks/s, but never less than 1 ms
+        self._live = deque(maxlen=max(1, int(live_seconds / chunk_seconds))) # number of chunks to hold in live
+        self._live_decimate = live_decimate # decimation factor for live preview
         self._live_rate = rate
 
         # Convert to HDF5 in a background thread, so the acquisition is not slowed
@@ -708,6 +707,7 @@ class USB6289(Instrument):
         writer.log({"event": "start", "channels": channels, "nominal_rate": rate, "conv_rate": conv_rate, "wall": time.time()})
 
         n = 0
+        arm_on_start = True          # see the acquire_chunks call below
         if use_pps:
             self.pps.start()      # before the AI task: it counts ai/SampleClock
         elif verbose:
@@ -715,12 +715,15 @@ class USB6289(Instrument):
         try:
             while stop_scans is None or n < stop_scans:
                 try:
-                    # A restart after a gap re-enters acquire_chunks, which
-                    # builds a NEW task, which arms, which calls _on_armed
-                    # again. See AnalogInput.set_on_armed: whether that is
-                    # what you want depends on what the callback does, and the
-                    # driver cannot know.
-                    for _, chunk in self.ai.acquire_chunks(duration=None):
+                    # start_armed only on the FIRST task. A restart after a gap
+                    # builds a new one, and firing _on_armed again would launch
+                    # a second QM job on top of the one already running. If you
+                    # need the opposite - something re-emitted so a restarted
+                    # task sees its trigger - do it in the gap handler below,
+                    # where you know a gap happened. See set_on_armed.
+                    chunks = self.ai.acquire_chunks(duration=None, start_armed=arm_on_start) # this is a generator, so it does not block until the whole run is done
+                    arm_on_start = False
+                    for _, chunk in chunks:
                         n += writer.write(chunk, n)
                         if use_pps:
                             writer.write_edges(self.pps.collect())
