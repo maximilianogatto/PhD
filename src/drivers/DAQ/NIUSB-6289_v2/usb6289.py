@@ -707,6 +707,7 @@ class USB6289(Instrument):
         writer.log({"event": "start", "channels": channels, "nominal_rate": rate, "conv_rate": conv_rate, "wall": time.time()})
 
         n = 0
+        chunks = None                # the live generator, closed in the finally
         arm_on_start = True          # see the acquire_chunks call below
         if use_pps:
             self.pps.start()      # before the AI task: it counts ai/SampleClock
@@ -756,6 +757,17 @@ class USB6289(Instrument):
                     continue           # back into the acquisition loop
                 break                  # the chunk loop ended on its own terms
         finally:
+            # Every exit from the chunk loop is a break, which leaves the
+            # generator SUSPENDED at its yield with the AI task still open and
+            # still sampling. It would be cleaned up when `chunks` goes out of
+            # scope - but that is refcounting doing us a favour, and an
+            # exception propagating here keeps the frame alive in its
+            # traceback, so the task would outlive the run. Close it
+            # explicitly: that raises GeneratorExit at the yield, which runs
+            # its finally, which stops the task. Producer first, then the
+            # counter that timestamps it, then the files.
+            if chunks is not None:
+                chunks.close()
             if use_pps:
                 self.pps.stop()
                 # Whatever was still queued when the loop exited. stop() joins

@@ -622,79 +622,103 @@ class AnalogInput(InstrumentModule):
         raise error
 
     #========================================================== acquisition
+    # def acquire(self):
+    #     """Acquire one record on every enabled channel.
+
+    #     Returns {channel name: 1-D array}, and stores it as the current scan
+    #     for the per-channel `trace` parameters. The arrays are all the same
+    #     length and share time_axis; they are NOT simultaneous - add each
+    #     channel's time_offset() if the skew matters.
+
+    #     WHY THIS DOES NOT CALL acquire_chunks(). The two look like the same
+    #     loop, and the duplication is real - about fifteen lines. It is kept on
+    #     purpose, for three reasons, in order of how much they matter:
+
+    #     1. WHEN _on_armed FIRES. Here it fires immediately after task.start(),
+    #        on the line below it, always, in this thread. acquire_chunks is a
+    #        GENERATOR: its body does not run at all until the caller asks for
+    #        the first chunk, so the task would be built and armed - and the
+    #        callback fired - at whatever moment the consumer happened to start
+    #        iterating. For a record that just returns an array that is
+    #        harmless; for the OPX handshake, where the callback launches the
+    #        job that emits the trigger, "whenever the caller gets round to it"
+    #        is not a specification.
+
+    #     2. WHEN THE TASK IS CLOSED. `with nidaqmx.Task()` inside a generator
+    #        only unwinds when the generator is exhausted, closed, or collected.
+    #        A caller who abandons it half way leaves the task open until the
+    #        garbage collector notices - and an open AI task holds the device.
+    #        Here the with-block is in a plain function, so it unwinds when the
+    #        function returns, exception or not.
+
+    #     3. SHAPE. This builds ONE 2-D array and slices it into rows, so the
+    #        whole record is two allocations. Going through acquire_chunks would
+    #        produce a dict of fresh arrays per chunk - five dicts a second for
+    #        the length of the record - and then need concatenating per channel.
+    #        Fine for streaming, where the point is that you never hold it all;
+    #        wasteful for a record you are going to hold anyway.
+
+    #     Use acquire_chunks when the record is too long for RAM, or when you
+    #     want to see it as it arrives. Use acquire() when you want the record.
+    #     """
+    #     n_target = self.n_samples()
+    #     rate = self._verify()[0]
+    #     chunk = max(100, min(n_target, int(rate // 5)))
+
+    #     with nidaqmx.Task() as task:
+    #         active = self._configure(task, chunk)
+    #         rate = float(task.timing.samp_clk_rate)
+    #         self._actual_rate = rate
+
+    #         reader = AnalogMultiChannelReader(task.in_stream)
+    #         # float64 is not a choice: DAQmxReadAnalogF64 writes doubles, and
+    #         # nidaqmx type-checks the array it is handed. The downcast to
+    #         # float32 happens on the copy below - 18 ADC bits sit inside
+    #         # float32's 24-bit mantissa with ~6 bits to spare, at any range.
+    #         buf = np.zeros((len(active), chunk), dtype=np.float64)
+
+    #         blocks = []
+    #         task.start()                       # arms; waits if triggered
+    #         if self._on_armed is not None:  #TODO: this is where the OPX job should be launched, but it is not yet implemented. We might run it and it acquisition in a thread.
+    #             self._on_armed()               # e.g. qm.execute(prog)
+    #         try:
+    #             while len(blocks) * chunk < n_target:
+    #                 reader.read_many_sample(buf, number_of_samples_per_channel=chunk, timeout=60.0)
+    #                 blocks.append(buf.astype(np.float32))   # copies, and halves the record
+    #         except nidaqmx.errors.DaqError as e:
+    #             raise RuntimeError(self._overflow_message(e, rate, len(active), len(blocks) * chunk)) from e
+    #         finally:
+    #             task.stop()
+    #     # Concatenate the blocks into one array, and trim to the requested length.
+    #     data = np.concatenate(blocks, axis=1)[:, :n_target]
+    #     self._last = {ch.short_name: data[i] for i, ch in enumerate(active)}
+    #     self._generation += 1  
+    #     return self._last
+    
+
     def acquire(self):
-        """Acquire one record on every enabled channel.
+        """Acquire one record on every enabled channel and store all in the current scan, and trace of each channel can pick its own row out of that.
 
         Returns {channel name: 1-D array}, and stores it as the current scan
         for the per-channel `trace` parameters. The arrays are all the same
         length and share time_axis; they are NOT simultaneous - add each
         channel's time_offset() if the skew matters.
 
-        WHY THIS DOES NOT CALL acquire_chunks(). The two look like the same
-        loop, and the duplication is real - about fifteen lines. It is kept on
-        purpose, for three reasons, in order of how much they matter:
-
-        1. WHEN _on_armed FIRES. Here it fires immediately after task.start(),
-           on the line below it, always, in this thread. acquire_chunks is a
-           GENERATOR: its body does not run at all until the caller asks for
-           the first chunk, so the task would be built and armed - and the
-           callback fired - at whatever moment the consumer happened to start
-           iterating. For a record that just returns an array that is
-           harmless; for the OPX handshake, where the callback launches the
-           job that emits the trigger, "whenever the caller gets round to it"
-           is not a specification.
-
-        2. WHEN THE TASK IS CLOSED. `with nidaqmx.Task()` inside a generator
-           only unwinds when the generator is exhausted, closed, or collected.
-           A caller who abandons it half way leaves the task open until the
-           garbage collector notices - and an open AI task holds the device.
-           Here the with-block is in a plain function, so it unwinds when the
-           function returns, exception or not.
-
-        3. SHAPE. This builds ONE 2-D array and slices it into rows, so the
-           whole record is two allocations. Going through acquire_chunks would
-           produce a dict of fresh arrays per chunk - five dicts a second for
-           the length of the record - and then need concatenating per channel.
-           Fine for streaming, where the point is that you never hold it all;
-           wasteful for a record you are going to hold anyway.
-
-        Use acquire_chunks when the record is too long for RAM, or when you
+        Use acquire_chunks() when the record is too long for RAM, or when you
         want to see it as it arrives. Use acquire() when you want the record.
         """
+        # use adquire chunks to get the data in chunks and then concatenate them to get the full record
         n_target = self.n_samples()
-        rate = self._verify()[0]
-        chunk = max(100, min(n_target, int(rate // 5)))
-
-        with nidaqmx.Task() as task:
-            active = self._configure(task, chunk)
-            rate = float(task.timing.samp_clk_rate)
-            self._actual_rate = rate
-
-            reader = AnalogMultiChannelReader(task.in_stream)
-            # float64 is not a choice: DAQmxReadAnalogF64 writes doubles, and
-            # nidaqmx type-checks the array it is handed. The downcast to
-            # float32 happens on the copy below - 18 ADC bits sit inside
-            # float32's 24-bit mantissa with ~6 bits to spare, at any range.
-            buf = np.zeros((len(active), chunk), dtype=np.float64)
-
-            blocks = []
-            task.start()                       # arms; waits if triggered
-            if self._on_armed is not None:  #TODO: this is where the OPX job should be launched, but it is not yet implemented. We might run it and it acquisition in a thread.
-                self._on_armed()               # e.g. qm.execute(prog)
-            try:
-                while len(blocks) * chunk < n_target:
-                    reader.read_many_sample(buf, number_of_samples_per_channel=chunk, timeout=60.0)
-                    blocks.append(buf.astype(np.float32))   # copies, and halves the record
-            except nidaqmx.errors.DaqError as e:
-                raise RuntimeError(self._overflow_message(e, rate, len(active), len(blocks) * chunk)) from e
-            finally:
-                task.stop()
-        # Concatenate the blocks into one array, and trim to the requested length.
-        data = np.concatenate(blocks, axis=1)[:, :n_target]
-        self._last = {ch.short_name: data[i] for i, ch in enumerate(active)}
-        self._generation += 1  
+        data = []
+        for i0, chunk in self.acquire_chunks(duration=self.duration()):
+            data.append(chunk)
+            if i0 + len(chunk[next(iter(chunk))]) >= n_target:
+                break
+        # concatenate the chunks into one array, and trim to the requested length
+        data = {ch: np.concatenate([chunk[ch] for chunk in data])[:n_target] for ch in data[0]}
+        self._last = data
+        self._generation += 1
         return self._last
-    
 
     def acquire_chunks(self, duration=None, start_armed=False):
         """Yield (i0, {channel: array}) as each chunk arrives, constant memory.
@@ -725,7 +749,7 @@ class AnalogInput(InstrumentModule):
             reader = AnalogMultiChannelReader(task.in_stream)
             buf = np.zeros((len(active), chunk), dtype=np.float64)  # DAQmx writes doubles
 
-            n_done = 0
+            n_done = 0  # number of samples done so far, per channel
             task.start()                       # arms; waits if triggered
             if self._on_armed is not None:
                 if start_armed: self._on_armed();
@@ -736,7 +760,7 @@ class AnalogInput(InstrumentModule):
                     
                     # return the number of samples done so far, and a dict of channel names to arrays. Ready for the next chunk. The arrays are copies, so the caller can keep them.
                     yield n_done, {nm: buf[i].astype(np.float32)for i, nm in enumerate(names)}
-                    n_done += chunk
+                    n_done += chunk     # increment the number of samples done so far, per channel
             except KeyboardInterrupt:
                 self.log.info("stopped by user after %d samples (%.3f s)",
                               n_done, n_done / rate)
