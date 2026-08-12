@@ -122,6 +122,33 @@ class SegmentWriter:
     def rotate(self, scan):
         """Close the current segment and open the next one at `scan`.
 
+        WHAT ROTATION IS. Every `rotate_minutes` the writer closes the file it
+        is filling and starts a new one. The data is unbroken across the join
+        - scan indices are global and continuous, and load_segment plus the
+        manifest reassemble it exactly - so rotation changes nothing about the
+        recording. It is purely about what you can DO with the bytes while the
+        run continues.
+
+        WHY BOTHER, when one file per channel is simpler (and is the default):
+
+        1. A CLOSED FILE CAN BE TOUCHED. Compressed, converted to HDF5, copied
+           to the group server, backed up by rsync. An open file that is still
+           being appended to cannot be safely copied - you get a torn read -
+           and cannot be compressed at all. On a week-long run this is the
+           difference between archiving as you go and waiting a week.
+
+        2. BLAST RADIUS. A filesystem error, a full disk, a bad sector costs
+           you the segment being written, not the whole run. With one 60 GB
+           file it costs everything after the damage.
+
+        3. TOOLS. A 60 GB file is awkward: some filesystems and a lot of
+           utilities are unhappy with it, and anything that wants to read it
+           whole needs 60 GB of RAM. Hourly files are 360 MB and ordinary.
+
+        WHY IT IS NOT THE DEFAULT. For a run of minutes or hours none of the
+        above applies, and four files in a directory is easier to understand
+        than fifty. rotate_minutes=None means never rotate.
+
         The index increments on EVERY rotation, unconditionally. (v1 only
         incremented it when HDF5 conversion was enabled, so with the default
         settings every manifest entry claimed to be segment 0 and
@@ -174,7 +201,10 @@ class SegmentWriter:
 
 
 class LongRun:
-    """Handle for a long_run() started with background=True."""
+    """Handle for a long_run() started with background=True.
+    
+    This class is a object to manipulate a long_run() thread. It is returned by long_run() when background=True, and can be used to check the status of the run, stop it, or wait for it to finish.
+    """
 
     def __init__(self, daq, thread, outdir):
         self._daq, self._thread, self.outdir = daq, thread, Path(outdir)

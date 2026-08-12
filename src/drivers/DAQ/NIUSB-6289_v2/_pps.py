@@ -190,22 +190,18 @@ class PPSCounter(InstrumentModule):
             # bug in this file, not a device limitation. (Conflating the two
             # is what made this take several rounds to find.)
             try:
-                channel.ci_data_xfer_req_cond = (
-                    InputDataTransferCondition.ON_BOARD_MEMORY_NOT_EMPTY)
+                channel.ci_data_xfer_req_cond = (InputDataTransferCondition.ON_BOARD_MEMORY_NOT_EMPTY)
             except nidaqmx.errors.DaqError as e:
                 self.log.info("device declined eager counter transfer (%s); "
                               "using blocking reads", e.error_code)
 
-            task.timing.cfg_samp_clk_timing(
-                rate=1.0, source=self.terminal(), active_edge=Edge.RISING,
-                sample_mode=AcquisitionType.CONTINUOUS,
-                samps_per_chan=16)      # small: 1 pps is 1 sample/second
+            task.timing.cfg_samp_clk_timing(rate=1.0, source=self.terminal(), active_edge=Edge.RISING,sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=16)      # small: 1 pps is 1 sample/second
         except Exception:
             task.close()
             raise
         return task
 
-    # =============================================================== control
+    # ================================================================ state
     def start(self):
         """Start the counter and the thread that drains it.
 
@@ -223,7 +219,7 @@ class PPSCounter(InstrumentModule):
             raise
 
         self._q = queue.Queue()     # fresh: no leftovers from a previous run
-        self._halt.clear()
+        self._halt.clear() # stop the reader thread when it sees this
         # A new counter task starts counting from 0, so the unwrap state has
         # to start over too. Without this, the first value of a SECOND run
         # looks smaller than the last value of the first one, a rollover is
@@ -235,7 +231,7 @@ class PPSCounter(InstrumentModule):
 
         def drain():
             consecutive_errors = 0
-            while not self._halt.is_set():
+            while not self._halt.is_set():  # we clear it in stop() to tell the thread to exit
                 try:
                     # 1.5 s > the 1 s between edges, so a timeout is rare and
                     # only serves to re-check the halt flag.
@@ -250,10 +246,8 @@ class PPSCounter(InstrumentModule):
                     # the manifest and n_edges will show.
                     consecutive_errors += 1
                     if consecutive_errors >= MAX_DRAIN_ERRORS:
-                        self.log.error(
-                            "1 pps counter failed %d times in a row (%s); "
-                            "giving up on edges for this run",
-                            consecutive_errors, e)
+                        self.log.error("1 pps counter failed %d times in a row (%s); "
+                                        "giving up on edges for this run",consecutive_errors, e)
                         return
                     self._halt.wait(DRAIN_ERROR_BACKOFF)
                     continue
@@ -267,8 +261,7 @@ class PPSCounter(InstrumentModule):
         # state where start() says "already running" and only stop() clears it.
         try:
             task.start()
-            self._thread = threading.Thread(target=drain, daemon=True,
-                                            name=f"{self.full_name}-drain")
+            self._thread = threading.Thread(target=drain, daemon=True, name=f"{self.full_name}-drain")
             self._thread.start()
         except Exception:
             self._halt.set()
@@ -288,7 +281,8 @@ class PPSCounter(InstrumentModule):
         value is already in the queue - collect() after this is race-free.
         Safe to call when nothing is running; the root's close() does.
         """
-        self._halt.set()
+        self._halt.set() # stop the reader thread, which is blocking on a read
+        
         if self._thread is not None:
             self._thread.join(3.0)
             self._thread = None
@@ -352,8 +346,8 @@ class PPSCounter(InstrumentModule):
             # the rate no longer means no filtering at all.
             scans_per_second = None
 
-        self._last_edges, dropped = clean_edges(self._last_edges_raw,
-                                                scans_per_second)
+        self._last_edges, dropped = clean_edges(self._last_edges_raw, scans_per_second)
+        
         if len(dropped):
             self.log.info(
                 "dropped %d latched value(s) that are not whole atomic "

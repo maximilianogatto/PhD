@@ -474,7 +474,37 @@ class AnalogInput(InstrumentModule):
         """Run `callback()` once the AI task is armed and waiting.
 
         This is where the QM job is launched: the DAQ must already be waiting
-        before the OPX emits its marker, or the trigger is missed.
+        before the OPX emits its marker, or the trigger is missed. The window
+        between task.start() and the callback is the only moment at which the
+        board is armed but nothing has been asked to fire yet.
+
+        CALLED ONCE PER TASK, NOT ONCE PER RUN. That is the same thing for
+        acquire(), which builds one task. It is NOT the same thing for
+        long_run(): a DaqError there restarts the acquisition, which builds a
+        NEW task, which arms, which calls this again. So over a week-long run
+        the callback fires once per restart.
+
+        Whether that is right depends on what the callback does, and only you
+        know:
+
+            relaunching is CORRECT if the callback starts something that must
+            be running for the DAQ to see anything - with ai.trigger set, a
+            restarted task waits for a marker that will never come again
+            unless something re-emits it;
+
+            relaunching is WRONG if the callback starts a job that is still
+            running from the first time, and you would end up with two.
+
+        If you need it once and only once, say so in the callback - it is one
+        line, and it is clearer there than as a flag here:
+
+            launched = False
+            def arm():
+                nonlocal launched
+                if not launched:
+                    qm.execute(prog)
+                    launched = True
+            daq.ai.set_on_armed(arm)
         """
         self._on_armed = callback
 
@@ -532,7 +562,7 @@ class AnalogInput(InstrumentModule):
                 f"channel with {n} enabled). One ADC serves them all - "
                 f"enabling a channel costs rate, it does not add capacity.")
 
-    def _configure(self, task, chunk):
+    def _configure(self, task, chunk) -> list[AIChannel]:
         """Build the AI task. The ONLY place this happens, so acquire() and
         the verified rates can never disagree about what the hardware does.
 
@@ -551,7 +581,7 @@ class AnalogInput(InstrumentModule):
             task.triggers.start_trigger.cfg_dig_edge_start_trig(self.trigger(), trigger_edge=Edge.RISING)
         return active
 
-    def _verify(self):
+    def _verify(self) -> tuple[float, float]:
         """(sample rate, convert rate) the hardware would really use.
 
         Verified, not acquired: the task is built and handed to DAQmx for
@@ -591,7 +621,7 @@ class AnalogInput(InstrumentModule):
                     f"USB will do this.")
         raise error
 
-    # ========================================================== acquisition
+    #========================================================== acquisition
     def acquire(self):
         """Acquire one record on every enabled channel.
 
@@ -599,6 +629,37 @@ class AnalogInput(InstrumentModule):
         for the per-channel `trace` parameters. The arrays are all the same
         length and share time_axis; they are NOT simultaneous - add each
         channel's time_offset() if the skew matters.
+
+        WHY THIS DOES NOT CALL acquire_chunks(). The two look like the same
+        loop, and the duplication is real - about fifteen lines. It is kept on
+        purpose, for three reasons, in order of how much they matter:
+
+        1. WHEN _on_armed FIRES. Here it fires immediately after task.start(),
+           on the line below it, always, in this thread. acquire_chunks is a
+           GENERATOR: its body does not run at all until the caller asks for
+           the first chunk, so the task would be built and armed - and the
+           callback fired - at whatever moment the consumer happened to start
+           iterating. For a record that just returns an array that is
+           harmless; for the OPX handshake, where the callback launches the
+           job that emits the trigger, "whenever the caller gets round to it"
+           is not a specification.
+
+        2. WHEN THE TASK IS CLOSED. `with nidaqmx.Task()` inside a generator
+           only unwinds when the generator is exhausted, closed, or collected.
+           A caller who abandons it half way leaves the task open until the
+           garbage collector notices - and an open AI task holds the device.
+           Here the with-block is in a plain function, so it unwinds when the
+           function returns, exception or not.
+
+        3. SHAPE. This builds ONE 2-D array and slices it into rows, so the
+           whole record is two allocations. Going through acquire_chunks would
+           produce a dict of fresh arrays per chunk - five dicts a second for
+           the length of the record - and then need concatenating per channel.
+           Fine for streaming, where the point is that you never hold it all;
+           wasteful for a record you are going to hold anyway.
+
+        Use acquire_chunks when the record is too long for RAM, or when you
+        want to see it as it arrives. Use acquire() when you want the record.
         """
         n_target = self.n_samples()
         rate = self._verify()[0]
@@ -633,8 +694,9 @@ class AnalogInput(InstrumentModule):
         self._last = {ch.short_name: data[i] for i, ch in enumerate(active)}
         self._generation += 1  
         return self._last
+    
 
-    def acquire_chunks(self, duration=None):
+    def acquire_chunks(self, duration=None, start_armed=False):
         """Yield (i0, {channel: array}) as each chunk arrives, constant memory.
 
         i0    scan index of the chunk's first sample, common to every channel,
@@ -666,14 +728,14 @@ class AnalogInput(InstrumentModule):
             n_done = 0
             task.start()                       # arms; waits if triggered
             if self._on_armed is not None:
-                self._on_armed()
+                if start_armed: self._on_armed();
 
             try:
                 while n_target is None or n_done < n_target:
-                    reader.read_many_sample(
-                        buf, number_of_samples_per_channel=chunk, timeout=60.0)
-                    yield n_done, {nm: buf[i].astype(np.float32)
-                                   for i, nm in enumerate(names)}
+                    reader.read_many_sample(buf, number_of_samples_per_channel=chunk, timeout=60.0)
+                    
+                    # return the number of samples done so far, and a dict of channel names to arrays. Ready for the next chunk. The arrays are copies, so the caller can keep them.
+                    yield n_done, {nm: buf[i].astype(np.float32)for i, nm in enumerate(names)}
                     n_done += chunk
             except KeyboardInterrupt:
                 self.log.info("stopped by user after %d samples (%.3f s)",

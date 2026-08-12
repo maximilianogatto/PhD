@@ -611,6 +611,23 @@ class USB6289(Instrument):
             print("  " + "  ".join(cells).rstrip())
         for note in notes:
             print(f"  {note}")
+            
+    def board_pinnout(self, verbose=True):
+        """Print the board's pinout table, from pinout_6289.py.
+
+        The table is a dict of {signal: [pin, ...]}, so a signal that lives on
+        multiple pins (grounds) is listed once with all its pins. The table is
+        not part of the driver, because it is not needed to run the board.
+        """
+        if pin_of is None:
+            print("pinout_6289.py not importable - cannot show pinout")
+            return
+        if verbose:
+            print(f"{self.name}: {self.device} pinout")
+            for signal, pins in sorted(pin_of._table.items()):
+                print(f"  {signal:<12} -> {', '.join(str(p) for p in pins)}")
+        return pin_of._table
+        
 
     # ============================================================ long runs
     def long_run(self, outdir, hours=None, rotate_minutes=None, restart=True,
@@ -698,19 +715,20 @@ class USB6289(Instrument):
         try:
             while stop_scans is None or n < stop_scans:
                 try:
+                    # A restart after a gap re-enters acquire_chunks, which
+                    # builds a NEW task, which arms, which calls _on_armed
+                    # again. See AnalogInput.set_on_armed: whether that is
+                    # what you want depends on what the callback does, and the
+                    # driver cannot know.
                     for _, chunk in self.ai.acquire_chunks(duration=None):
                         n += writer.write(chunk, n)
                         if use_pps:
                             writer.write_edges(self.pps.collect())
 
                         if live_decimate:
-                            self._append_live(chunk, channels[0], n,
-                                              live_decimate)
+                            self._append_live(chunk, channels[0], n, live_decimate)
 
-                        self._run_state = {"scans": n, "seconds": n / rate,
-                                           "segment": writer.index,
-                                           "channels": channels,
-                                           "wall": time.time()}
+                        self._run_state = {"scans": n, "seconds": n / rate, "segment": writer.index, "channels": channels,"wall": time.time()}
 
                         if self._stop.is_set():
                             if verbose:
@@ -722,9 +740,7 @@ class USB6289(Instrument):
                     if verbose:
                         print(f"\n  stopped by user at {n / rate:,.1f} s")
                 except (nidaqmx.errors.DaqError, RuntimeError, OSError) as e:
-                    writer.log({"event": "gap", "sample": n,
-                                "wall": time.time(),
-                                "error": str(e).splitlines()[0]})
+                    writer.log({"event": "gap", "sample": n, "wall": time.time(),"error": str(e).splitlines()[0]})
                     if not restart:
                         raise
                     if verbose:
@@ -756,14 +772,32 @@ class USB6289(Instrument):
         """Keep a decimated slice of one channel for live_preview()."""
         n_before = n_after - len(chunk[channel])
         offset = (-n_before) % decimate       # keep a global decimation grid
-        self._live.append((n_before + offset,
-                           chunk[channel][offset::decimate].copy()))
+        self._live.append((n_before + offset, chunk[channel][offset::decimate].copy()))
 
     def live_preview(self, channel=None):
         """(seconds, volts) for the recent past of a running long_run().
 
-        Decimated, so it stays small enough to replot continuously. Safe to
-        call from another thread while the acquisition runs:
+        WHERE THE LIVE DATA IS. There are two answers, and picking the wrong
+        one is the usual confusion:
+
+          THIS - a deque in RAM (self._live), holding the last `live_seconds`
+          (default 60) of the FIRST enabled channel, decimated by
+          `live_decimate` (default 100, so 250 points/s instead of 25,000).
+          It is a health check: is there a signal, is it the right size, is it
+          still going. Nothing more. It is bounded on purpose - an unbounded
+          live buffer is just a slow memory leak with a week to work in.
+
+          THE FILE - everything. Every channel, every sample, flushed about
+          five times a second, so the bytes are on disk within 200 ms of being
+          measured. To LOOK at a run - scroll back an hour, zoom, hunt for
+          events - read the file, do not read this. That is what livescope.py
+          does, and it can do it from another process or another machine
+          because it never touches the DAQ:
+
+              from livescope import LiveScope
+              LiveScope(outdir, channel="ai0", width=5.0).show()
+
+        So: this for "is it alive", the file for "what did it measure".
 
             run = daq.long_run(outdir, background=True)
             while run.alive:
@@ -771,8 +805,8 @@ class USB6289(Instrument):
                 ax.clear(); ax.plot(t, y); display(fig)
                 time.sleep(1)
 
-        Only the FIRST enabled channel is buffered - this is a health check,
-        not a data path. Everything else is on disk.
+        Safe to call from another thread while the acquisition runs - it only
+        copies the deque, and the writer only appends to it.
         """
         items = list(self._live)
         if not items:
