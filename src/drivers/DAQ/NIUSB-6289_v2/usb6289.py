@@ -725,7 +725,7 @@ class USB6289(Instrument):
         writer = SegmentWriter(outdir, channels, rate, rotate_scans,convert_q=convert_q, verbose=verbose)
         writer.log({"event": "start", "channels": channels, "nominal_rate": rate, "conv_rate": conv_rate, "wall": time.time()})
 
-        n = 0
+        n = 0   # scans written so far, across all segments. 
         chunks = None                # the live generator, closed in the finally
         arm_on_start = True          # see the acquire_chunks call below
         if use_pps:

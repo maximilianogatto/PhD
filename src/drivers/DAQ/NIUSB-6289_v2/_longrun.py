@@ -103,6 +103,22 @@ class SegmentWriter:
         """Close the open files and record them. Safe before the first one."""
         if not self.files:
             return
+
+        if self.n == 0:
+            # An EMPTY segment, and it is not hypothetical: write() rotates as
+            # soon as a segment is full, so a run whose length is a whole
+            # number of rotations - hours=3 with rotate_minutes=60 - fills
+            # segment 2, rotates, opens segment 3, and then stops. Leaving it
+            # gives a 0-byte file and a manifest entry claiming a segment that
+            # contains nothing, which is exactly the sort of thing that makes
+            # someone count their files and doubt the whole recording.
+            for channel in self.channels:
+                self.files[channel].close()
+                (self.outdir / self.names[channel]).unlink(missing_ok=True)
+            self.files.clear()
+            self.index -= 1          # rotate() will re-use this number
+            return
+
         closed_wall = time.time()
         for channel in self.channels:
             self.files[channel].close()

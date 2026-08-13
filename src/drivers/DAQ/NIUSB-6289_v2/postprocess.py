@@ -267,16 +267,60 @@ def load_segment(outdir, index, channel=None, mmap=False):
         names = channels_of(outdir)
         channel = names[0] if names else None
 
-    entry = next(e for e in manifest
-                 if e.get("index") == index and "file" in e
-                 and (channel is None or e.get("channel") == channel))
+    entry = next(e for e in manifest if e.get("index") == index and "file" in e and (channel is None or e.get("channel") == channel))
     path = outdir / entry["file"]
     # mmap=True leaves the samples on disk and pages in only what you touch,
     # so an 8 GB segment plots without 8 GB of RAM. Slice it like an array.
-    y = (np.memmap(path, dtype=np.float32, mode="r") if mmap
-         else np.fromfile(path, dtype=np.float32))
+    y = (np.memmap(path, dtype=np.float32, mode="r") if mmap else np.fromfile(path, dtype=np.float32))
     i0 = entry["start_sample"]
     return np.arange(i0, i0 + len(y), dtype=np.int64), y
+
+
+def iter_segments(outdir, channel=None, mmap=False):
+    """Yield (scan indices, samples) for each segment of one channel, in order.
+
+    The way to walk a multi-segment run without holding it all at once:
+
+        for idx, y in iter_segments(outdir, "ai0"):
+            ...                       # one hour at a time
+
+    Scan indices are global and continuous across segments, so the pieces line
+    up end to end - unless the manifest records a GAP between them, in which
+    case they are adjacent in index but not in time.
+    """
+    outdir = Path(outdir)
+    manifest, _ = load_long_run(outdir)
+    if channel is None:
+        names = channels_of(outdir)
+        channel = names[0] if names else None
+
+    entries = sorted((e for e in manifest if "file" in e
+                      and (channel is None or e.get("channel") == channel)),
+                     key=lambda e: e["index"])
+    for entry in entries:
+        path = outdir / entry["file"]
+        y = (np.memmap(path, dtype=np.float32, mode="r") if mmap
+             else np.fromfile(path, dtype=np.float32))
+        i0 = entry["start_sample"]
+        yield np.arange(i0, i0 + len(y), dtype=np.int64), y
+
+
+def load_run(outdir, channel=None):
+    """(scan indices, samples) for a WHOLE run of one channel, concatenated.
+
+    Convenient, and it costs RAM: 4 bytes per scan per channel, so an hour at
+    25 kS/s is 360 MB and a day is 8.6 GB. Check before you call it -
+
+        sum(e["n"] for e in load_long_run(outdir)[0] if "file" in e)
+
+    - or use iter_segments to work a segment at a time, or livescope.RunFiles
+    to read just the window you want to look at.
+    """
+    parts = list(iter_segments(outdir, channel))
+    if not parts:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float32)
+    return (np.concatenate([i for i, _ in parts]),
+            np.concatenate([y for _, y in parts]))
 
 
 # ========================================================= HDF5 archiving
