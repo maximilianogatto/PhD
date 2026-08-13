@@ -14,6 +14,9 @@ ON-DISK LAYOUT
                         one line per closed FILE
                         one line per GAP, where an error interrupted the run
     edges.i64         1 pps positions, int64, as global SCAN indices
+    markers.i64       event positions, int64, same units - written only when
+                      marker.terminal is set, so a run without markers simply
+                      has no such file
     seg_00000_ai0_20260811T101500Z.f32     signal, float32
 
 ONE FILE PER CHANNEL PER SEGMENT. The alternative - interleaving the channels

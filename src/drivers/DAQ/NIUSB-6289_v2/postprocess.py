@@ -10,6 +10,7 @@ The on-disk layout written by long_run() is multichannel from v2 on:
     run.json          describe() at the start of the run
     manifest.jsonl    one line per file, plus a line for every gap
     edges.i64         1 pps edge positions, as global SCAN indices
+    markers.i64       event positions, same units; absent if no markers
     seg_00000_ai0_20260811T101500Z.f32     one file per channel per segment
 
 A scan index counts sample clock ticks, not conversions, so it means the same

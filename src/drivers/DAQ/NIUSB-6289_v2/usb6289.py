@@ -1,8 +1,9 @@
 """
 QCoDeS driver for the NI USB-6289 - v2, split into instrument submodules.
 
-STATUS. Everything from v1 is ported: the three subsystems, long_run() and
-wiring(). Exercised on the real board: DC levels, waveform generation,
+STATUS. Everything from v1 is ported: analog in, analog out, the 1 pps
+counter, long_run() and wiring(). Added since: a second counter that
+timestamps external markers. Exercised on the real board: DC levels, waveform generation,
 clock_check against the FS725 rubidium, and a 300 s triggered acquisition
 with the 1 pps, the AI trigger and the AO trigger all on PFI8.
 
@@ -107,6 +108,11 @@ class USB6289(Instrument):
         |   `-- terminal, counter, running, n_edges, measured_rate, ppm
         |                             (no channels: one counter, one job)
         |
+        |-- marker                    InstrumentModule     <- the event counter
+        |   `-- terminal, counter, running, n_marks, enabled
+        |                             (no channels either; ScanStamper is the
+        |                              mechanism both counters share)
+        |
         `-- ao                        InstrumentModule     <- the AO task
             |-- shape, freq, amp, offset, rate, duty, trigger, wave_channel
             |-- actual_freq, running, dc_levels, fifo_samples, buffer_len
@@ -114,7 +120,7 @@ class USB6289(Instrument):
             |   `-- role, dc
             `-- channels              ChannelList - the same 4, as a group
 
-    36 channel objects, 3 modules, 1 instrument.
+    36 channel objects, 4 modules, 1 instrument.
 
     =============================================== WHAT EACH LEVEL MAY OWN
 
@@ -125,18 +131,25 @@ class USB6289(Instrument):
       * what belongs to the BOARD: device, caps (queried once, before any
         submodule, because their validators are built from it), and the
         counter claims;
-      * anything needing TWO SUBSYSTEMS AT ONCE: acquire_with_pps (the counter
-        must start before the AI clock), clock_check (ai + pps + optionally
-        ao), long_run (ai + pps);
-      * lifecycle. close() has to tear down ao and pps by hand, because
-        submodules have no close hook of their own.
+      * anything needing TWO SUBSYSTEMS AT ONCE: acquire_with_pps (the
+        counters must start before the AI clock), clock_check (ai + pps +
+        optionally ao), long_run (ai + pps + marker);
+      * lifecycle. close() has to tear down ao, pps and marker by hand,
+        because submodules have no close hook of their own.
 
-    ai / pps / ao - InstrumentModule. One of each. A module is a SUBSYSTEM: a
-    task, a clock, a trigger. It owns every setting the hardware decides once
-    for the whole task - you cannot give two AI pins different sample rates,
-    so `rate` lives here and not on the channel. `pps` shows that a module is
-    not about size or repetition: it has no channels at all, because there is
-    one counter doing one job.
+    ai / pps / marker / ao - InstrumentModule. One of each. A module is a
+    SUBSYSTEM: a task, a clock, a trigger. It owns every setting the hardware
+    decides once for the whole task - you cannot give two AI pins different
+    sample rates, so `rate` lives here and not on the channel. `pps` and
+    `marker` show that a module is not about size or repetition: neither has
+    any channels, because each is one counter doing one job.
+
+    Those two are the same mechanism (ScanStamper, in _stamper.py) pointed at
+    different wires: a counter that records the scan index of every pulse on a
+    PFI line. The rubidium gives atomic seconds - the RULER - and whatever the
+    OPX sends gives events. The board has exactly two counters and both are
+    spoken for; a start trigger needs none, because it is not timestamped, it
+    DEFINES scan 0.
 
     AIChannel / AOChannel - InstrumentChannel. 32 and 4 identical copies. A
     channel owns only what the HARDWARE lets each pin decide for itself: an AI
@@ -169,13 +182,16 @@ class USB6289(Instrument):
 
         usb6289.py      USB6289(Instrument)                    in the tree
         _ai.py          AnalogInput, AIChannel, 3 Parameters   in the tree
-        _pps.py         PPSCounter                             in the tree
+        _stamper.py     ScanStamper - the counter mechanism    in the tree
+        _pps.py         PPSCounter(ScanStamper)                in the tree
+        _marker.py      MarkerCounter(ScanStamper)             in the tree
         _ao.py          AnalogOutput, AOChannel                in the tree
         _longrun.py     SegmentWriter, LongRun                 NOT in the tree
         postprocess.py  free functions                         NOT in the tree
+        livescope.py    RunFiles, LiveScope                    NOT in the tree
         pinout_6289.py  the screw-terminal table               NOT in the tree
 
-    The last three import numpy and nothing else - no qcodes, no nidaqmx. That
+    The last four import numpy and nothing else - no qcodes, no nidaqmx. That
     is the point of the last row of the placement rule: SegmentWriter manages
     files, and a .f32 file is not a property of the hardware. It has no
     parameters, no snapshot and no parent, so it is a plain class. The payoff
