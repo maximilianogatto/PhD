@@ -50,9 +50,9 @@ from _longrun import LongRun, SegmentWriter    # noqa: E402
 from postprocess import _hdf5_worker           # noqa: E402
 
 try:
-    from pinout_6289 import nearest_ground, pin_of
+    from pinout_6289 import nearest_ground, pin_of, signal_at, table
 except ImportError:                            # the driver still works
-    pin_of = nearest_ground = None
+    pin_of = nearest_ground = signal_at = table = None
 
 # Fallbacks only - the real numbers come from the device. Measured on a
 # USB-6289: single 666,666.67 S/s (20 MHz / 30), multi-channel 500,000 S/s
@@ -469,6 +469,51 @@ class USB6289(Instrument):
             print(f"  {tag} [{where:3}] {first}")
             for line in rest:
                 print(f"{'':16}{line}")      # aligns under the message
+
+    # =============================================================== pinout
+    # The screw-terminal table is static - it is the connector, not the
+    # configuration - so it lives in pinout_6289.py as plain data. These are
+    # thin wrappers, here only because "which terminal is ai3?" is the most
+    # asked question in the lab and `daq.` is where people look for it.
+    # For the LIVE configuration - what to plug in for what is set up right
+    # now - use wiring() below instead.
+
+    @staticmethod
+    def pin_of(signal):
+        """Screw terminal carrying a signal: daq.pin_of('ai3') -> 10.
+
+        Accepts 'ai3', 'AI 3', 'Dev1/ai3', 'PFI8', 'AI GND'. Grounds appear on
+        many pins, so those return a list - use nearest_ground() to pick one.
+        """
+        if pin_of is None:
+            raise RuntimeError("pinout_6289.py is not importable")
+        return pin_of(signal)
+
+    @staticmethod
+    def signal_at(pin):
+        """The inverse: daq.signal_at(10) -> 'AI 3'. What IS this terminal?"""
+        if signal_at is None:
+            raise RuntimeError("pinout_6289.py is not importable")
+        return signal_at(pin)
+
+    @staticmethod
+    def nearest_ground(pin, ground="AI GND"):
+        """The ground pin closest to `pin` - the one to actually wire to.
+
+        ground is 'AI GND', 'AO GND' or 'D GND'. Which one matters: returning
+        a signal through the wrong ground is how you get a mains hum you
+        cannot explain.
+        """
+        if nearest_ground is None:
+            raise RuntimeError("pinout_6289.py is not importable")
+        return nearest_ground(pin, ground)
+
+    @staticmethod
+    def pinout():
+        """Print the whole 128-pin connector, both halves side by side."""
+        if table is None:
+            raise RuntimeError("pinout_6289.py is not importable")
+        table()
 
     # ================================================================ wiring
     def wiring(self, verbose=True):
