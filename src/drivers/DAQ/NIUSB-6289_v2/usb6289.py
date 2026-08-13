@@ -46,6 +46,7 @@ if str(_HERE) not in sys.path:
 from _ai import AnalogInput      # noqa: E402  (after the path bootstrap)
 from _pps import PPSCounter      # noqa: E402
 from _ao import AnalogOutput     # noqa: E402
+from _marker import MarkerCounter               # noqa: E402
 from _longrun import LongRun, SegmentWriter    # noqa: E402
 from postprocess import _hdf5_worker           # noqa: E402
 
@@ -214,6 +215,7 @@ class USB6289(Instrument):
         self.add_submodule("ai", AnalogInput(self))
         self.add_submodule("pps", PPSCounter(self))
         self.add_submodule("ao", AnalogOutput(self))
+        self.add_submodule("marker", MarkerCounter(self))
 
         self.connect_message()
 
@@ -443,7 +445,7 @@ class USB6289(Instrument):
             daq.check(strict=True)      # refuse to continue
         """
         problems = []
-        for name in ("ai", "pps", "ao"):
+        for name in ("ai", "pps", "ao", "marker"):
             module = getattr(self, name, None)
             if module is not None and hasattr(module, "check"):
                 problems.extend(module.check())
@@ -926,6 +928,8 @@ class USB6289(Instrument):
         n = 0   # scans written so far, across all segments. 
         chunks = None                # the live generator, closed in the finally
         arm_on_start = True          # see the acquire_chunks call below
+        if use_marker:
+            self.marker.start()   # before the AI task, same as the counter below
         if use_pps:
             self.pps.start()      # before the AI task: it counts ai/SampleClock
         elif verbose:
@@ -967,6 +971,8 @@ class USB6289(Instrument):
                         n += writer.write(chunk, n)
                         if use_pps:
                             writer.write_edges(self.pps.collect())
+                        if use_marker:
+                            writer.write_marks(self.marker.collect())
 
                         if live_decimate:
                             self._append_live(chunk, channels[0], n, live_decimate)
@@ -1007,6 +1013,9 @@ class USB6289(Instrument):
             # counter that timestamps it, then the files.
             if chunks is not None:
                 chunks.close()
+            if use_marker:
+                self.marker.stop()
+                writer.write_marks(self.marker.collect())
             if use_pps:
                 self.pps.stop()
                 # Whatever was still queued when the loop exited. stop() joins
@@ -1113,7 +1122,7 @@ class USB6289(Instrument):
                   "simulated": None, "driver_version": None}
 
         out = {"device": self.device, "hardware": hw}
-        for key in ("ai", "pps", "ao"):
+        for key in ("ai", "pps", "ao", "marker"):
             module = getattr(self, key, None)
             if module is not None and hasattr(module, "describe"):
                 out[key] = module.describe()
@@ -1124,7 +1133,7 @@ class USB6289(Instrument):
         """Submodules have no close() hook - tear them down from here, or a
         DAQmx task is left holding a pin at its last voltage and the pps
         reader thread outlives the instrument."""
-        for teardown in ("ao.stop", "pps.stop"):
+        for teardown in ("ao.stop", "pps.stop", "marker.stop"):
             module, method = teardown.split(".")
             target = getattr(self, module, None)
             if target is not None:

@@ -392,6 +392,44 @@ def load_run(outdir, channel=None, mmap=False, manifest=None):
             np.concatenate([y for _, y in parts]))
 
 
+def load_markers(outdir):
+    """Marker scan indices for a run, or an empty array if there are none.
+
+    Raw, like everything else on disk. Unlike the 1 pps there is nothing to
+    clean: events are irregular, so no interval is implausible and any filter
+    would be guessing. Repeated values are real information - two pulses
+    within one scan period, or pulses that arrived while the AI clock was
+    stopped.
+    """
+    path = Path(outdir) / "markers.i64"
+    if not path.exists():
+        return np.zeros(0, dtype=np.int64)
+    return np.fromfile(path, dtype=np.int64)
+
+
+def marker_times(outdir):
+    """(scan indices, atomic seconds) for every marker of a run.
+
+    The whole point of recording the scan index rather than a time: this is
+    one call, and it uses the same edge table that times the samples, so a
+    marker and the data around it cannot disagree.
+
+        marks, t = marker_times(outdir)
+        idx, y = load_run(outdir, "ai0")
+        y[marks - idx[0]]              # the samples AT the markers
+        np.diff(t)                     # how long the OPX spent between them
+    """
+    outdir = Path(outdir)
+    manifest, edges = load_long_run(outdir)
+    marks = load_markers(outdir)
+    if not len(marks) or not len(edges):
+        return marks, np.zeros(0, dtype=np.float64)
+
+    header = next((e for e in manifest if e.get("event") == "start"), {})
+    rate = header.get("nominal_rate")
+    return marks, times_from_edges(marks, edges, scans_per_second=rate)
+
+
 # ========================================================= HDF5 archiving
 def segment_to_hdf5(f32_path, start_sample=0, rate=None, channel=None,
                     delete_raw=False, compression="gzip", compression_opts=4):

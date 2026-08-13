@@ -86,6 +86,7 @@ class SegmentWriter:
 
         self._manifest = open(manifest_path, "x")
         self._edges = open(self.outdir / "edges.i64", "xb")
+        self._marks = None          # opened lazily: no markers, no file
         self.rotate(0)               # open the first segment
 
     # ---------------------------------------------------------------- log
@@ -207,12 +208,24 @@ class SegmentWriter:
             edges.astype(np.int64, copy=False).tofile(self._edges)
             self._edges.flush() # flush so the tail of the file can be read while it is still being written
 
+    def write_marks(self, marks):
+        """Append marker scan indices. Opened on first use, so a run with no
+        marker line simply has no markers.i64 rather than an empty one."""
+        if not len(marks):
+            return
+        if self._marks is None:
+            self._marks = open(self.outdir / "markers.i64", "xb")
+        marks.astype(np.int64, copy=False).tofile(self._marks)
+        self._marks.flush()
+
     def close(self, scan):
         """Close the final segment and every file this writer owns."""
         self._close_segment()
         if self.convert_q is not None:
             self.convert_q.put(None)      # exactly once, at the very end
         self._edges.close()
+        if self._marks is not None:
+            self._marks.close()
         self._manifest.close()
 
 
