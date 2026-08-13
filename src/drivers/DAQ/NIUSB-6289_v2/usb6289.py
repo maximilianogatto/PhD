@@ -65,6 +65,26 @@ COUNTERS = ("ctr0", "ctr1")
 PFI_LINES = tuple(f"PFI{i}" for i in range(16))
 AI_RANGES = (0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)   # M Series programmable gains
 
+# DEFAULT counter terminals, from the M Series user manual. NOT a restriction:
+# every PFI line on an M Series board is fully routable to every timing signal,
+# which is exactly what distinguishes it from the older E Series, where PFI 0
+# really was the AI start trigger and nothing else. These are only the pins a
+# counter uses when you do not say otherwise - worth knowing because a counter
+# left on its defaults will quietly grab them.
+#
+# terminal_roles() prefers what the DEVICE reports and falls back to this.
+M_SERIES_DEFAULTS = {
+    "PFI3":  "CTR 1 SRC (default)",
+    "PFI4":  "CTR 1 GATE (default)",
+    "PFI8":  "CTR 0 SRC (default)",
+    "PFI9":  "CTR 0 GATE (default)",
+    "PFI10": "CTR 0 AUX (default)",
+    "PFI11": "CTR 1 AUX (default)",
+    "PFI12": "CTR 0 OUT (default)",
+    "PFI13": "CTR 1 OUT (default)",
+    "PFI14": "FREQ OUT (default)",
+}
+
 
 class USB6289(Instrument):
     """The NI USB-6289, as a tree of QCoDeS submodules.
@@ -577,6 +597,75 @@ class USB6289(Instrument):
                       "from outside the board.")
                 print("   Prefer a line whose D GND is adjacent for an "
                       "external TTL.")
+        return rows
+
+    def terminal_roles(self, verbose=True):
+        """Every PFI line: its pins, what YOU are using it for, and what the
+        board would use it for by default.
+
+        NO PFI LINE IS DEDICATED. On an M Series board every PFI is routable to
+        every timing signal - start trigger, sample clock, counter source or
+        gate - so "which pin is the trigger pin?" has no answer beyond "the one
+        you chose". (On the older E Series it did: PFI 0 was the AI start
+        trigger. That is not this board.)
+
+        What the manual does define is the pin each counter uses WHEN YOU DO
+        NOT SAY OTHERWISE. This driver always says otherwise - pps routes the
+        counter's sample clock explicitly - so the defaults constrain nothing
+        here. They are worth seeing anyway: a counter left on its defaults in
+        some other script will quietly take those lines.
+
+        Where possible the defaults are read back FROM THE DEVICE rather than
+        from the table, on the same principle as everything else in this
+        driver.
+
+        Returns [(line, pin, ground, in_use_by, default_role)].
+        """
+        in_use = {}
+        for label, terminal in (("ai.trigger", self.ai.trigger()),
+                                ("ao.trigger", self.ao.trigger()),
+                                ("pps.terminal", self.pps.terminal())):
+            if terminal:
+                in_use.setdefault(terminal.split("/")[-1], []).append(label)
+
+        defaults = dict(M_SERIES_DEFAULTS)
+        source = "the M Series manual"
+        try:
+            queried = {}
+            for counter in self.caps["ctrs"]:
+                with nidaqmx.Task() as task:
+                    channel = task.ci_channels.add_ci_count_edges_chan(
+                        f"{self.device}/{counter}")
+                    line = channel.ci_count_edges_term.split("/")[-1]
+                    queried[line] = f"{counter.upper()} SRC (default)"
+            if queried:
+                defaults.update(queried)
+                source = "the device, with the manual for the rest"
+        except Exception:
+            pass
+
+        rows = []
+        for terminal, pin, ground in self.terminals(physical=True,
+                                                    verbose=False):
+            line = terminal.split("/")[-1]
+            rows.append((line, pin, ground,
+                         ", ".join(in_use.get(line, [])) or "",
+                         defaults.get(line, "")))
+
+        if verbose:
+            print(f"{self.name}: PFI lines - defaults from {source}\n")
+            print(f"   {'line':<7}{'pin':>4}{'D GND':>7}   "
+                  f"{'in use by':<24}{'default role'}")
+            print("   " + "-" * 68)
+            for line, pin, ground, using, role in rows:
+                near = "" if abs(ground - pin) == 1 else " (far)"
+                print(f"   {line:<7}{pin:>4}{ground:>7}{near:<6} "
+                      f"{using:<24}{role}")
+            free = [r[0] for r in rows if not r[3]]
+            print(f"\n   free right now: {free}")
+            print("   Any of them can be a trigger or carry the 1 pps - the "
+                  "defaults above are\n   not reservations, only what a "
+                  "counter takes if nobody tells it otherwise.")
         return rows
 
     # ================================================================ wiring
