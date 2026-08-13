@@ -359,8 +359,33 @@ class AnalogOutput(InstrumentModule):
     
     def setup(self, channels_role: dict = None, shape: str = None,
               freq: float = None, amp: float = None, offset: float = None,
-              rate: float = None, duty: float = None, trigger: str = None):
+              rate: float = None, duty: float = None, trigger: str = None,
+              exclusive: bool = False):
         """Configure multiple channel roles and waveform parameters in one call.
+
+        NOT EXCLUSIVE BY DEFAULT, unlike ai.setup - and the difference bites in
+        one specific way, so it is worth knowing before it does. This call
+        touches only the channels you NAME; anything already playing a role
+        keeps it. So the returned list - which is `active`, every channel in
+        the task - can be longer than the dict you passed:
+
+            daq.ao.setup({"ao0": {"wave": 1.0}, "ao1": {"dc": 0.0}})
+            ao0, = daq.ao.setup({"ao0": {"wave": 1.0}})   # ValueError!
+                                       # ao1 is still 'dc', so active is TWO
+
+        Either name every channel you mean, including the ones you want off:
+
+            ao0, = daq.ao.setup({"ao0": {"wave": 1.0}, "ao1": "off"})
+
+        or pass exclusive=True, which sets every channel you did not name to
+        'off' for you.
+
+        Why the default is False, when ai.setup's is True: switching an INPUT
+        off costs nothing, while switching an OUTPUT off stops driving a pin -
+        and an untimed output holds its last voltage rather than going to zero,
+        so 'off' is not the harmless state it is on the input side. Turning
+        somebody's bias off as a side effect of configuring something else is
+        not a default worth having.
 
         For example:
 
@@ -418,6 +443,10 @@ class AnalogOutput(InstrumentModule):
             self.trigger(trigger)
 
         if channels_role is not None:
+            if exclusive:
+                for channel in self.channels:
+                    if channel.short_name not in channels_role:
+                        channel.role("off")
             for channel_name, role_spec in channels_role.items():
                 channel = getattr(self, channel_name)
                 role, volts = self._parse_role_spec(channel_name, role_spec)
