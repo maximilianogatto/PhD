@@ -246,28 +246,41 @@ def load_long_run(outdir):
     return manifest, edges
 
 
-def channels_of(outdir):
+def channels_of(outdir, manifest=None):
     """Channel names recorded in a long_run directory, in task order."""
-    manifest, _ = load_long_run(outdir)
+    if manifest is None:
+        manifest, _ = load_long_run(outdir)
     for entry in manifest:
         if "channels" in entry:
             return list(entry["channels"])
     return []
 
 
-def load_segment(outdir, index, channel=None, mmap=False):
+def load_segment(outdir, index, channel=None, mmap=False, manifest=None):
     """(global scan indices, signal) for one channel of one segment.
 
     channel=None picks the first channel of the run, which is the only one
     that exists for a single-channel recording.
     """
     outdir = Path(outdir)
-    manifest, _ = load_long_run(outdir)
+    if manifest is None:
+        manifest, _ = load_long_run(outdir)
     if channel is None:
-        names = channels_of(outdir)
+        names = channels_of(outdir, manifest)
         channel = names[0] if names else None
 
-    entry = next(e for e in manifest if e.get("index") == index and "file" in e and (channel is None or e.get("channel") == channel))
+    # ONE row of the manifest: the file holding segment `index` of `channel`.
+    # next(..., None) rather than a bare next(): an unmatched bare next raises
+    # StopIteration with an EMPTY message, and inside a generator it would end
+    # the iteration silently instead of erroring at all.
+    entry = next((e for e in manifest
+                  if e.get("index") == index and "file" in e
+                  and (channel is None or e.get("channel") == channel)), None)
+    if entry is None:
+        have = sorted({e["index"] for e in manifest if "file" in e})
+        raise KeyError(
+            f"no segment {index} for channel {channel!r} in {outdir}. "
+            f"Segments present: {have}. Channels: {channels_of(outdir, manifest)}")
     path = outdir / entry["file"]
     # mmap=True leaves the samples on disk and pages in only what you touch,
     # so an 8 GB segment plots without 8 GB of RAM. Slice it like an array.
@@ -276,7 +289,7 @@ def load_segment(outdir, index, channel=None, mmap=False):
     return np.arange(i0, i0 + len(y), dtype=np.int64), y
 
 
-def iter_segments(outdir, channel=None, mmap=False):
+def iter_segments(outdir, channel=None, mmap=False, manifest=None):
     """Yield (scan indices, samples) for each segment of one channel, in order.
 
     The way to walk a multi-segment run without holding it all at once:
@@ -289,9 +302,10 @@ def iter_segments(outdir, channel=None, mmap=False):
     case they are adjacent in index but not in time.
     """
     outdir = Path(outdir)
-    manifest, _ = load_long_run(outdir)
+    if manifest is None:
+        manifest, _ = load_long_run(outdir)
     if channel is None:
-        names = channels_of(outdir)
+        names = channels_of(outdir, manifest)
         channel = names[0] if names else None
 
     entries = sorted((e for e in manifest if "file" in e
@@ -305,7 +319,7 @@ def iter_segments(outdir, channel=None, mmap=False):
         yield np.arange(i0, i0 + len(y), dtype=np.int64), y
 
 
-def load_run(outdir, channel=None):
+def load_run(outdir, channel=None, mmap=False, manifest=None):
     """(scan indices, samples) for a WHOLE run of one channel, concatenated.
 
     Convenient, and it costs RAM: 4 bytes per scan per channel, so an hour at
@@ -316,7 +330,7 @@ def load_run(outdir, channel=None):
     - or use iter_segments to work a segment at a time, or livescope.RunFiles
     to read just the window you want to look at.
     """
-    parts = list(iter_segments(outdir, channel))
+    parts = list(iter_segments(outdir, channel, mmap, manifest))
     if not parts:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float32)
     return (np.concatenate([i for i, _ in parts]),
