@@ -185,7 +185,7 @@ class AnalogOutput(InstrumentModule):
         # See "WHY THE SETTINGS ARE STORED TWICE" in the module docstring.
         self._cfg = {"shape": "square", "freq": 100.0, "amp": 1.0,
                      "offset": 0.0, "rate": 100_000.0, "duty": 0.5,
-                     "trigger": None}
+                     "trigger": None, "v_range": None}
 
         channels = ChannelList(self, "channels", AOChannel)
         for i, ch_name in enumerate(caps["ao"]):
@@ -254,6 +254,23 @@ class AnalogOutput(InstrumentModule):
             get_cmd=lambda: self._cfg["duty"],
             set_cmd=partial(self._set, "duty"), initial_cache_value=0.5,
             vals=Numbers(0.01, 0.99))
+
+        self.add_parameter(
+            "v_range", label="AO output range (fixed)", unit="V",
+            get_cmd=lambda: self._cfg["v_range"],
+            set_cmd=partial(self._set, "v_range"), initial_cache_value=None,
+            docstring="PIN the output range instead of letting it be sized "
+                      "automatically. None (the default) sizes it for the "
+                      "largest signal in the task, which is right until a DC "
+                      "level CHANGES while a waveform is running: the range "
+                      "then changes with it, the task is rebuilt to apply the "
+                      "new one, and the DAC code it was holding is "
+                      "reinterpreted in the new scale - a +1 V sample on a "
+                      "+/-1.2 V range becomes +5 V on a +/-6 V one. That is a "
+                      "real spike on a real output. Pin the range to the "
+                      "widest signal you will use and it cannot happen. Must "
+                      "still cover everything in the task; check() says so if "
+                      "it does not.")
 
         self.add_parameter(
             "trigger", label="AO start trigger terminal",
@@ -597,10 +614,20 @@ class AnalogOutput(InstrumentModule):
                 f"amp ({self.amp()}) + |offset| ({abs(self.offset())}) = "
                 f"{peak} V exceeds +/-{AO_MAX} V")
 
-        # One range covers the whole task, so size it for the largest signal
-        # on any channel in it.
+        # One range covers the whole task - a hardware constraint, not a
+        # choice. Sized for the largest signal in it, unless v_range pins it.
         levels = [abs(c._dc) for c in self.channels if c._role == "dc"]
-        span = min(AO_MAX, 1.2 * max([1.0, peak] + levels))
+        fixed = self.v_range()
+        if fixed:
+            span = min(AO_MAX, abs(fixed))
+            biggest = max([peak] + levels)
+            if biggest > span:
+                raise ValueError(
+                    f"v_range is pinned at +/-{span:g} V but the task carries "
+                    f"{biggest:g} V. Raise v_range, or set it to None to size "
+                    f"the range automatically.")
+        else:
+            span = min(AO_MAX, 1.2 * max([1.0, peak] + levels))
 
         data, n, f_actual = self._build()
         task = nidaqmx.Task()
@@ -746,6 +773,17 @@ class AnalogOutput(InstrumentModule):
                 "error", "ao",
                 f"amp ({self.amp():g}) + |offset| ({abs(self.offset()):g}) = "
                 f"{peak:g} V exceeds +/-{AO_MAX} V on {wave}"))
+
+        levels = [abs(c.dc()) for c in self.channels if c.role() == "dc"]
+        if not self.v_range() and levels and max(levels) > 1.2 * peak:
+            problems.append((
+                "warning", "ao",
+                f"the output range is sized automatically and a DC channel "
+                f"({max(levels):g} V) is far above the waveform ({peak:g} V). "
+                f"CHANGING that level while generating re-ranges the DAC, and "
+                f"the code it is holding is reinterpreted in the new scale - a "
+                f"visible spike on the waveform. Pin it: "
+                f"daq.ao.v_range({min(AO_MAX, 1.2 * max(levels)):g})."))
 
         buffer_len = self.buffer_len_now()
         fifo = self.fifo_samples_now()
