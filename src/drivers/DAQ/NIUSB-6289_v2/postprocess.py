@@ -35,6 +35,8 @@ from pathlib import Path
 
 import numpy as np
 
+ANCHOR_CANDIDATES = 8   # leading artefacts tolerated by clean_edges
+
 
 # =============== Time to atomic seconds ==========================
 
@@ -75,22 +77,32 @@ def clean_edges(edges, scans_per_second=None, tol=0.05):
         if scans_per_second <= 0:
             return edges, np.zeros(0, dtype=np.int64)
 
-    def sweep(anchor):
+    # Collapse runs of IDENTICAL values to their first occurrence. Repeats
+    # cannot all be atomic seconds - they are what the counter emits while the
+    # AI clock is stopped, and the clock is stopped in two ordinary
+    # situations: waiting for a start trigger, and a long_run gap. Doing this
+    # first is what makes the anchor search below work, because otherwise
+    # every candidate anchor is the same frozen value.
+    distinct = np.flatnonzero(np.concatenate([[True], np.diff(edges) != 0]))
+
+    def sweep(start):
         """Greedy pass keeping edges a whole number of seconds apart."""
-        keep = [anchor]
-        for i in range(anchor + 1, len(edges)):
+        keep = [distinct[start]]
+        for i in distinct[start + 1:]:
             seconds = (edges[i] - edges[keep[-1]]) / scans_per_second
             if seconds >= 0.5 and abs(seconds - round(seconds)) <= tol:
                 keep.append(i)
         return keep
 
-    # Anchoring on edge 0 assumes edge 0 is real. It usually is - but the
-    # counter can emit an initial value at task start, before the AI clock has
-    # produced a single scan, and then the FIRST edge is the artefact. Sweeping
-    # from both candidates and keeping the better result costs one extra pass
-    # and removes the assumption. (An acquisition triggered off the same line
-    # as the 1 pps produces exactly this: two values at scan 0.)
-    best = max((sweep(0), sweep(1)), key=len)
+    # Anchoring on the first value assumes it is real. Often it is not: with a
+    # start trigger the counter runs while the task waits, so EVERY edge before
+    # the trigger latches 0 and the first real one sits at an arbitrary
+    # fraction of a second. Anchored on a zero, every genuine edge looks wrong
+    # and the whole table is discarded - which is exactly what happened before
+    # this loop existed. Trying the first few distinct values and keeping the
+    # longest result costs a handful of passes and removes the assumption.
+    best = max((sweep(a) for a in range(min(ANCHOR_CANDIDATES, len(distinct)))),
+               key=len)
     kept = set(best)
     dropped = [i for i in range(len(edges)) if i not in kept]
     return edges[best], edges[dropped]
@@ -254,6 +266,49 @@ def channels_of(outdir, manifest=None):
         if "channels" in entry:
             return list(entry["channels"])
     return []
+
+
+def trigger_time(outdir):
+    """When the acquisition actually began, and where the atomic seconds sit.
+
+    A triggered run does not start when you call long_run - it starts when the
+    edge arrives, possibly seconds later, and the sample clock does not tick
+    until then. So the manifest carries two different wall times:
+
+        "start"       when the run was configured
+        "first_scan"  when the first chunk came back; the trigger fired about
+                      one chunk earlier
+
+    Returns a dict with the estimated trigger wall time and, if the edge table
+    is available, the offset from scan 0 to the FIRST atomic second in the
+    record - which is the number that ties the trigger to the rubidium:
+
+        the trigger happened `first_edge_seconds` before that atomic second.
+
+    Note what is NOT recoverable: the atomic seconds that passed while the task
+    was armed and waiting. The counter counts the sample clock, and the clock
+    was not running, so every edge in that window latched 0 and clean_edges
+    discards them. Nothing is lost that was ever measured - the board simply
+    was not counting yet.
+    """
+    manifest, edges = load_long_run(outdir)
+    header = next((e for e in manifest if e.get("event") == "start"), {})
+    first = next((e for e in manifest if e.get("event") == "first_scan"), None)
+    rate = header.get("nominal_rate")
+
+    out = {"configured_wall": header.get("wall"),
+           "trigger": (first or {}).get("trigger"),
+           "trigger_wall": None, "first_edge_scan": None,
+           "first_edge_seconds": None}
+
+    if first is not None and rate:
+        out["trigger_wall"] = first["wall"] - first["chunk_scans"] / rate
+
+    kept, _ = clean_edges(edges, rate)
+    if len(kept):
+        out["first_edge_scan"] = int(kept[0])
+        out["first_edge_seconds"] = float(kept[0] / rate) if rate else None
+    return out
 
 
 def load_segment(outdir, index, channel=None, mmap=False, manifest=None):

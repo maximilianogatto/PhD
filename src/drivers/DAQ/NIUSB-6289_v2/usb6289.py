@@ -942,6 +942,28 @@ class USB6289(Instrument):
                     chunks = self.ai.acquire_chunks(duration=None, start_armed=arm_on_start) # this is a generator, so it does not block until the whole run is done
                     arm_on_start = False
                     for _, chunk in chunks:
+                        if n == 0:
+                            # WHEN THE TRIGGER FIRED, as well as it can be
+                            # known. The "start" line above is written while
+                            # the task is still being configured; with a start
+                            # trigger the clock does not run until the edge
+                            # arrives, which may be seconds later. This line is
+                            # written when the FIRST chunk comes back, so the
+                            # trigger fired about one chunk earlier.
+                            #
+                            # Tens of milliseconds of accuracy - useless for
+                            # timing, which is what the 1 pps is for, but
+                            # ample to identify WHICH atomic second the record
+                            # begins in, and so to line the run up against
+                            # anything else with a clock.
+                            first_len = len(chunk[channels[0]])
+                            writer.log({"event": "first_scan", "scan": 0,
+                                        "wall": time.time(),
+                                        "chunk_scans": first_len,
+                                        "trigger": self.ai.trigger(),
+                                        "note": "trigger fired approx "
+                                                "chunk_scans/nominal_rate "
+                                                "before this wall time"})
                         n += writer.write(chunk, n)
                         if use_pps:
                             writer.write_edges(self.pps.collect())
