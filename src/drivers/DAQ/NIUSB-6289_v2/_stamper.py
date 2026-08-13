@@ -33,6 +33,13 @@ CPU), wakes the instant a pulse arrives, and puts the value in a queue. The
 acquisition loop then takes from the queue without ever blocking - the same
 split as the AI stream, each side draining its own buffer.
 
+A TRIGGER DOES NOT NEED ONE OF THESE. The board has two counters and it can
+look like three things want one - the 1 pps, the markers, and the trigger. It
+is two: a start trigger is not timestamped, it DEFINES scan 0, so there is
+nothing to record and the timing engine handles it directly
+(cfg_dig_edge_start_trig). Only the two signals that must be placed IN the
+data consume a counter.
+
 ORDER MATTERS. Start the counter BEFORE the AI task. It counts the AI sample
 clock, so if the clock is already running when the counter starts, the first
 latched value is measured from a start you never observed.
@@ -126,8 +133,7 @@ class ScanStamper(InstrumentModule):
         device = self.root_instrument.device
         task = nidaqmx.Task()
         try:
-            channel = task.ci_channels.add_ci_count_edges_chan(
-                f"{device}/{self.counter()}")
+            channel = task.ci_channels.add_ci_count_edges_chan(f"{device}/{self.counter()}")
             channel.ci_count_edges_term = f"/{device}/ai/SampleClock"
 
             # Ask the device to hand each latched value over as soon as it
@@ -143,8 +149,7 @@ class ScanStamper(InstrumentModule):
             # bug in this file, not a device limitation. (Conflating the two
             # is what made this take several rounds to find.)
             try:
-                channel.ci_data_xfer_req_cond = (
-                    InputDataTransferCondition.ON_BOARD_MEMORY_NOT_EMPTY)
+                channel.ci_data_xfer_req_cond = (InputDataTransferCondition.ON_BOARD_MEMORY_NOT_EMPTY)
             except nidaqmx.errors.DaqError as e:
                 self.log.info("device declined eager counter transfer (%s); "
                               "using blocking reads", e.error_code)

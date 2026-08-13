@@ -130,8 +130,7 @@ class PPSCounter(ScanStamper):
             # the rate no longer means no filtering at all.
             scans_per_second = None
 
-        self._last_edges, dropped = clean_edges(self._last_edges_raw,
-                                                scans_per_second)
+        self._last_edges, dropped = clean_edges(self._last_edges_raw, scans_per_second)
         if len(dropped):
             self.log.info(
                 "dropped %d latched value(s) that are not whole atomic "
