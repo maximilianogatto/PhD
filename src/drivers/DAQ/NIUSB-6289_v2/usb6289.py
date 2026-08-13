@@ -285,20 +285,39 @@ class USB6289(Instrument):
         at the QM marker and the first edge tells you how far the next atomic
         second was from the start of the shot.
 
-        Lives on the instrument, not on either submodule, because it drives
-        both: the counter has to be started before the AI clock runs, and
-        stopped and joined before the queue is drained.
+        MARKERS TOO, if marker.terminal is set. A one-shot acquisition gets
+        them exactly as long_run does - the counter runs alongside the record -
+        and they come back on daq.marker.last_marks rather than in the return
+        value, so this call keeps its two-item signature:
+
+            data, edges = daq.acquire_with_pps()
+            marks = daq.marker.last_marks          # scan indices, or None
+            t = times_from_edges(marks, edges,
+                                 scans_per_second=daq.ai.actual_rate())
+
+        Lives on the instrument, not on any submodule, because it drives all
+        of them: the counters have to be started before the AI clock runs, and
+        stopped and joined before their queues are drained.
         """
-        self.pps.start()               # before the AI task: it counts ai/SampleClock
+        use_marker = bool(self.marker.terminal())
+
+        # Both counters BEFORE the AI task - they count ai/SampleClock, so
+        # they have to be watching before that clock runs.
+        if use_marker:
+            self.marker.start()
+        self.pps.start()
         try:
             data = self.ai.acquire()
         finally:
             # Collect inside the finally, not after it: stop() joins the
             # reader, so the queue is complete either way, and on a failed
-            # acquisition the edges that WERE caught still say when the
-            # failure happened. Draining also leaves nothing behind.
+            # acquisition whatever WAS caught still says when the failure
+            # happened. Draining also leaves nothing behind.
             self.pps.stop()
             self.pps.set_last_edges(self.pps.collect())
+            if use_marker:
+                self.marker.stop()
+                self.marker.set_last_marks(self.marker.collect())
         return data, self.pps.last_edges
 
     def clock_check(self, seconds=None, verbose=True):
@@ -839,7 +858,20 @@ class USB6289(Instrument):
 
         See _longrun.py for the on-disk layout and why it is that way. Stop
         any time with the interrupt button - the current segment is closed and
-        recorded. On a DAQmx error the run restarts and the gap goes in the
+        recorded.
+
+        WHEN DOES `hours` START? At the TRIGGER, not at this call. The length
+        is counted in SCANS - hours x 3600 x rate - and with ai.trigger set the
+        sample clock does not tick until its edge arrives, so no scans
+        accumulate while the task waits. Ask for 10 minutes and you get 10
+        minutes OF DATA however long the trigger takes to turn up; the wall
+        clock simply runs longer.
+
+        The corollary: if the trigger never arrives, nothing is ever recorded.
+        The read times out after 60 s, which counts as a DaqError, so with
+        restart=True the run logs a gap and tries again - forever. Watch
+        run.status()['seconds'] stay at 0 and you are waiting on a trigger
+        that is not coming. On a DAQmx error the run restarts and the gap goes in the
         manifest rather than being silently spliced.
 
         background=True runs it in a thread and returns a LongRun handle, so
