@@ -40,7 +40,7 @@ ANCHOR_CANDIDATES = 8   # leading artefacts tolerated by clean_edges
 
 # =============== Time to atomic seconds ==========================
 
-def clean_edges(edges, scans_per_second=None, tol=0.05):
+def clean_edges(edges, scans_per_second=None, tol=0.002):
     """Drop latched counter values that cannot be atomic seconds.
 
     Returns (kept, dropped). An atomic second is one second: the gap between
@@ -59,9 +59,21 @@ def clean_edges(edges, scans_per_second=None, tol=0.05):
     after the last real edge. Left in, it drags the mean rate down brutally:
     on a 60 s record a 16 ms straggler turned +14 ppm into +16,403 ppm.
 
-    tol=0.05 accepts anything within 5% of a whole second. That is 50,000 ppm
-    - enormous next to the +/-50 ppm a board like this can drift, and far
-    tighter than the artefact it rejects.
+    tol=0.002 accepts a gap within 0.2% of a whole second - 2,000 ppm, still
+    forty times looser than the +/-50 ppm this board is specified to drift, and
+    tight enough to matter: at the old 5% a trigger that fired within 50 ms of
+    an atomic second made the counter's leading zero look like a valid second
+    too, and the axis came out shifted by that offset.
+
+    WHAT REMAINS AMBIGUOUS, and it cannot be fixed here. If the trigger fires
+    within `tol` of a second boundary, the leading zero is a whole second from
+    the first real edge - to within tol - and no spacing test can tell it from
+    a genuine atomic second, because it very nearly is one. It is then kept,
+    and the ORIGIN of the axis moves by one second. Every interval stays
+    exact: durations, event spacings and the drift curve are unaffected, and
+    only the label on t=0 changes. Since t=0 means "the first edge kept" and
+    nothing more, that is harmless - and the window in which it can happen is
+    2 ms wide, which is what tol buys.
     """
     edges = np.asarray(edges, dtype=np.int64)
     if len(edges) < 3:
@@ -86,13 +98,24 @@ def clean_edges(edges, scans_per_second=None, tol=0.05):
     distinct = np.flatnonzero(np.concatenate([[True], np.diff(edges) != 0]))
 
     def sweep(start):
-        """Greedy pass keeping edges a whole number of seconds apart."""
+        """Greedy pass keeping edges a whole number of seconds apart.
+
+        Returns the kept indices AND how badly they fit. Two anchors can keep
+        the same number of edges - a leading zero and the first real edge do,
+        when the trigger fired close to a second boundary - and then the count
+        cannot choose between them. The fit can: anchored on the real edge
+        every gap is a whole second to within the board's drift, while
+        anchored on the zero every gap is off by the trigger's offset.
+        """
         keep = [distinct[start]]
+        misfit = 0.0
         for i in distinct[start + 1:]:
             seconds = (edges[i] - edges[keep[-1]]) / scans_per_second
-            if seconds >= 0.5 and abs(seconds - round(seconds)) <= tol:
+            error = abs(seconds - round(seconds))
+            if seconds >= 0.5 and error <= tol:
                 keep.append(i)
-        return keep
+                misfit += error
+        return keep, misfit
 
     # Anchoring on the first value assumes it is real. Often it is not: with a
     # start trigger the counter runs while the task waits, so EVERY edge before
@@ -101,8 +124,9 @@ def clean_edges(edges, scans_per_second=None, tol=0.05):
     # and the whole table is discarded - which is exactly what happened before
     # this loop existed. Trying the first few distinct values and keeping the
     # longest result costs a handful of passes and removes the assumption.
-    best = max((sweep(a) for a in range(min(ANCHOR_CANDIDATES, len(distinct)))),
-               key=len)
+    best, _ = max((sweep(a)
+                   for a in range(min(ANCHOR_CANDIDATES, len(distinct)))),
+                  key=lambda result: (len(result[0]), -result[1]))
     kept = set(best)
     dropped = [i for i in range(len(edges)) if i not in kept]
     return edges[best], edges[dropped]
