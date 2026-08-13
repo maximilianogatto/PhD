@@ -618,8 +618,17 @@ class AnalogOutput(InstrumentModule):
             if n <= fifo:
                 # Loop from onboard memory: no USB traffic, so a saturated AI
                 # stream cannot starve the output (DaqError -200621).
-                for ao_channel in task.ao_channels:
-                    ao_channel.ao_use_only_on_brd_mem = True
+                #
+                # Set it on ALL channels AT ONCE via .all, never one at a time
+                # in a loop. DAQmx requires this property to hold the same
+                # value for every channel on the device (-200106), so the
+                # moment a loop has set it on the first of two, the task is in
+                # a state the driver rejects - and it raises on the NEXT
+                # access, which is the loop's own iteration, so the traceback
+                # points at the iteration rather than at the assignment. It
+                # only ever bites with two or more AO channels in the task,
+                # which is why a single-channel waveform never showed it.
+                task.ao_channels.all.ao_use_only_on_brd_mem = True
             else:
                 self.log.warning(
                     "AO buffer is %d samples, over the %d-sample FIFO: the "
