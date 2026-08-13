@@ -31,6 +31,29 @@ kind of marker from another. Let ORDER carry the meaning instead: the OPX
 program defines the sequence, so mark 0 is whatever it emits first. The DAQ
 only has to say when.
 
+THE TIDIEST ARRANGEMENT: THE SAME LINE AS THE TRIGGER.
+
+    daq.ai.setup(..., trigger="/Dev1/PFI8")
+    daq.marker.terminal("/Dev1/PFI8")      # the SAME line
+
+A PFI input fans out inside the board, so one wire can feed the start trigger
+and a counter at once. Then the pulse that starts the acquisition is also its
+first marker, and it lands at scan 0 - which is where the trigger is BY
+DEFINITION, so the leading 0 in markers.i64 is not an artefact, it is the
+answer. Every later pulse on the same line is an ordinary marker. One cable,
+one PFI line, and the trigger arrives already timestamped on the same ruler as
+everything else.
+
+    marks[0] == 0        the trigger
+    marks[1:]            whatever the OPX did next
+
+The one thing this arrangement demands: whatever emits the pulse must be
+launched from ai.set_on_armed(). A pulse sent before the task has armed
+triggers nothing - the task is not listening yet - and still latches a 0 into
+the marker table, so you get a mark with no acquisition behind it. The
+callback fires in the only moment when the board is armed and nothing has been
+asked to fire yet, which is exactly the window this needs.
+
 WHAT THIS BUYS. The DAQ records continuously; the OPX does not. So the markers
 say which stretches of an unbroken recording correspond to the OPX doing
 something, and which are the gaps while it drained a buffer or reset. The DAQ
@@ -103,6 +126,19 @@ class MarkerCounter(ScanStamper):
         problems = []
         if not self.terminal():
             return problems                    # not using markers is fine
+
+        trigger = self.root_instrument.ai.trigger()
+        if trigger and trigger == self.terminal():
+            problems.append((
+                "note", "marker",
+                f"marker.terminal and ai.trigger are both {trigger}, so the "
+                f"pulse that STARTS the acquisition is also its first marker "
+                f"- and it lands at scan 0, which is where the trigger is by "
+                f"definition. Deliberate and one cable fewer; flagged so the "
+                f"leading 0 in markers.i64 is not mistaken for an artefact. "
+                f"Launch whatever emits the pulse from ai.set_on_armed(), or "
+                f"a pulse sent before the task arms is lost AND leaves a "
+                f"spurious 0."))
 
         if self.terminal() == self.root_instrument.pps.terminal():
             problems.append((

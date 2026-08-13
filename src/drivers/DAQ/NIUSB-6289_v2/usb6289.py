@@ -483,10 +483,13 @@ class USB6289(Instrument):
             print(f"{self.name}: configuration OK")
             return
         errors = sum(1 for level, _, _ in problems if level == "error")
-        warnings = len(problems) - errors
-        print(f"{self.name}: {errors} error(s), {warnings} warning(s)")
+        warnings = sum(1 for level, _, _ in problems if level == "warning")
+        notes = len(problems) - errors - warnings
+        print(f"{self.name}: {errors} error(s), {warnings} warning(s), "
+              f"{notes} note(s)")
         for level, where, message in problems:
-            tag = "ERROR  " if level == "error" else "warning"
+            tag = {"error": "ERROR  ",
+                   "warning": "warning"}.get(level, "note   ")
             first, *rest = textwrap.wrap(message, 68)
             print(f"  {tag} [{where:3}] {first}")
             for line in rest:
