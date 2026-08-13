@@ -533,35 +533,50 @@ class USB6289(Instrument):
         physical one - a pulse from the rubidium cannot arrive on an internal
         route.
 
-        Returns [(terminal, pin)] with pin None for internal routes.
+        The ground pin is listed too, because a digital input needs a return
+        and the board does not make them equally convenient: PFI 8-15 each sit
+        NEXT to a D GND pin, while PFI 0-7 are 2 to 9 pins away from the
+        nearest one. For an external TTL - a 1 pps, a marker from another
+        instrument - prefer a PFI 8-15 line: a short return loop picks up less,
+        and adjacent screws are simply easier to get right at the terminal
+        block.
+
+        Returns [(terminal, pin, ground_pin)], pin None for internal routes.
         """
         rows = []
         for terminal in self.caps["terminals"]:
             line = terminal.split("/")[-1]
-            pin = None
+            pin = ground = None
             if pin_of is not None:
                 try:
                     found = pin_of(line)
                     pin = found[0] if isinstance(found, list) else found
+                    ground = nearest_ground(pin, "D GND")
                 except KeyError:
-                    pin = None
+                    pin = ground = None
             if physical and pin is None:
                 continue
-            rows.append((terminal, pin))
+            rows.append((terminal, pin, ground))
 
         if verbose:
             kind = "physical (a cable can reach these)" if physical \
                 else "every routable terminal"
             print(f"{self.name}: {len(rows)} {kind}")
-            for terminal, pin in rows:
-                where = f"terminal {pin:>3}" if pin is not None \
-                    else "internal route"
-                print(f"   {terminal:<28} {where}")
+            for terminal, pin, ground in rows:
+                if pin is None:
+                    print(f"   {terminal:<28} internal route")
+                    continue
+                near = "adjacent" if abs(ground - pin) == 1 \
+                    else f"{abs(ground - pin)} pins away"
+                print(f"   {terminal:<28} terminal {pin:>3}   "
+                      f"D GND {ground:>3} ({near})")
             if physical:
                 print("\n   ai.trigger / ao.trigger accept these AND internal "
                       "routes - terminals(physical=False) for the rest.")
                 print("   pps.terminal must be one of these: the pulse comes "
                       "from outside the board.")
+                print("   Prefer a line whose D GND is adjacent for an "
+                      "external TTL.")
         return rows
 
     # ================================================================ wiring
