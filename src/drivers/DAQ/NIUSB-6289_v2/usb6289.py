@@ -515,6 +515,55 @@ class USB6289(Instrument):
             raise RuntimeError("pinout_6289.py is not importable")
         table()
 
+    def terminals(self, physical=True, verbose=True):
+        """Terminals that can be a start trigger or carry the 1 pps.
+
+        The board reports two very different kinds of routable terminal, and
+        the difference decides what you can use each one for:
+
+          PHYSICAL - a PFI line with a screw terminal. A cable can be plugged
+                     into it, so a signal from OUTSIDE the board can arrive
+                     here. The 1 pps needs one of these.
+          INTERNAL - a route with no pin at all: /Dev1/ai/SampleClock,
+                     /Dev1/Ctr0InternalOutput and friends. One subsystem can
+                     trigger another through these, but nothing external can
+                     reach them.
+
+        So: ai.trigger and ao.trigger accept EITHER. pps.terminal must be a
+        physical one - a pulse from the rubidium cannot arrive on an internal
+        route.
+
+        Returns [(terminal, pin)] with pin None for internal routes.
+        """
+        rows = []
+        for terminal in self.caps["terminals"]:
+            line = terminal.split("/")[-1]
+            pin = None
+            if pin_of is not None:
+                try:
+                    found = pin_of(line)
+                    pin = found[0] if isinstance(found, list) else found
+                except KeyError:
+                    pin = None
+            if physical and pin is None:
+                continue
+            rows.append((terminal, pin))
+
+        if verbose:
+            kind = "physical (a cable can reach these)" if physical \
+                else "every routable terminal"
+            print(f"{self.name}: {len(rows)} {kind}")
+            for terminal, pin in rows:
+                where = f"terminal {pin:>3}" if pin is not None \
+                    else "internal route"
+                print(f"   {terminal:<28} {where}")
+            if physical:
+                print("\n   ai.trigger / ao.trigger accept these AND internal "
+                      "routes - terminals(physical=False) for the rest.")
+                print("   pps.terminal must be one of these: the pulse comes "
+                      "from outside the board.")
+        return rows
+
     # ================================================================ wiring
     def wiring(self, verbose=True):
         """Every screw terminal to connect, for the CURRENT settings.
