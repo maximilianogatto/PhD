@@ -741,6 +741,40 @@ class AnalogOutput(InstrumentModule):
         self._actual_freq = None
         self._write_static(zero_wave_channel=zero)
 
+    def reset(self, zero=True):
+        """Put every output back to 'off', and by default down to 0 V first.
+
+        Roles ACCUMULATE, because setup() only touches the channels you name -
+        which is the right default for outputs, and is also why a later
+        setup({"ao0": ...}) can return two channels and break an unpacking.
+        This is the clean slate:
+
+            daq.ao.reset()
+            ao0, = daq.ao.setup({"ao0": {"wave": 1.0}})   # now really one
+
+        zero=True writes 0 V to every driven pin BEFORE switching it off,
+        because 'off' does not mean 0 V - an untimed output holds its last
+        value indefinitely, so switching a 5 V line off leaves 5 V on the
+        screw. Pass zero=False only if something downstream needs the level
+        held.
+
+        Waveform settings - shape, freq, amp, rate, v_range - are left alone.
+        They are not what accumulates, and losing a carefully chosen frequency
+        because you wanted the roles cleared would be its own surprise.
+        """
+        if self._generating:
+            self.stop(zero=zero)
+
+        if zero:
+            for channel in self.channels:
+                if channel.role() == "dc" and channel.dc() != 0.0:
+                    channel.dc(0.0)
+
+        for channel in self.channels:
+            if channel.role() != "off":
+                channel.role("off")
+        return self.active
+
     @contextmanager
     def generating(self, **overrides):
         """Generate for the duration of a `with` block, then stop and zero.

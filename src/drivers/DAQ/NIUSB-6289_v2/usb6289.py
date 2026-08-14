@@ -453,6 +453,28 @@ class USB6289(Instrument):
         print(f"\n  over a day that error is "
               f"{abs(r['ppm']) * 86400 / 1e6:.2f} s")
 
+    def reset(self, zero=True):
+        """A clean slate between experiments, without reconstructing anything.
+
+        Resets what ACCUMULATES - output roles and levels, enabled inputs, the
+        trigger, the on_armed callback - and stops both counters. Returns
+        nothing; call setup() afterwards as if the instrument were new.
+
+        What it deliberately does NOT touch: pps.terminal and marker.terminal,
+        because those describe the WIRING rather than the configuration. The
+        cable is still where it was, and clearing them would only mean typing
+        them in again after every reset.
+        """
+        for name in ("pps", "marker"):
+            module = getattr(self, name, None)
+            if module is not None:
+                try:
+                    module.stop()
+                except Exception:
+                    pass
+        self.ao.reset(zero=zero)
+        self.ai.reset()
+
     # ================================================================= check
     def check(self, verbose=True, strict=False):
         """Validate the whole configuration WITHOUT acquiring or generating.

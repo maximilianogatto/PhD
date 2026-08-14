@@ -470,6 +470,27 @@ class AnalogInput(InstrumentModule):
             return float("nan")
         return active.index(channel) / conv
 
+    def reset(self):
+        """Disable every input, clear the trigger, and forget on_armed.
+
+        The counterpart to ao.reset(). enable() is already exclusive, so
+        channels do not accumulate here - but two other things do, and both
+        are easy to carry into a later cell without noticing:
+
+            trigger     a task set up to wait for an edge will WAIT, and with
+                        nothing to send the edge it waits out the 60 s read
+                        timeout and errors;
+            on_armed    a callback set for one acquisition fires on every
+                        acquisition afterwards.
+        """
+        for channel in self.channels:
+            if channel.enabled():
+                channel.enabled(False)
+        self.trigger(None)
+        self._on_armed = None
+        self._last = None
+        return self.active
+
     def set_on_armed(self, callback):
         """Run `callback()` once the AI task is armed and waiting.
 
