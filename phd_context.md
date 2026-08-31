@@ -1,6 +1,6 @@
 # PhD Context
 
-Last update: 05/08/2026
+Last update: 31/08/2026
 
 ---
 
@@ -14,14 +14,22 @@ Supervisor(s): Pol Forn Díaz
 **Thesis project**: [qrades] — full detail in Section 3. I also collaborate on other projects of the group ([ntd_qubit], [rfsoc]); each one is listed in Section3 with my role in it.
 
 **Current stage:**
-- Onboarding and learning about the project. Installing tools.
-- Design phase: testing design, benchmarking Palace vs COMSOL, building tooling on top of SQDMetal.
+- Reading about the state of the art in photon counter based on superconducting qubits.
+- Learning how to use COMSOL and Palace to simulate 3D cavities and qubits.
+
 
 ---
 
 # 2. Long-term objective
 
-
+- Design and make an aluminuin cavity to test design and fabrications skills.
+- Design and make a transmon qubit using aliminum to test design and fabrications skills.
+- Measure the transmon qubit with the cavity to test the setup and learn how to control and readout a qubit.
+- Figure out constraints and requirements to use superconducting layers in 3D cavities.
+- Design cavity using copper covered by a superconducting layer to store photons.
+- Test the cavity with the qubit to detect photons.
+- Design and make a fluxonium qubit using nitrAl to detect photons.
+- Try nitrAl fluxonium qubit with the cavity to detect photons.
 
 ---
 
@@ -29,7 +37,7 @@ Supervisor(s): Pol Forn Díaz
 
 Each project states my **Role**: *Lead* (I drive it), *Collaborator* (I own a well-defined part), *Support* (someone else leads, I help).
 
-## QRADES — photon counter with 3D fluxonium @qrades
+## QRADES — photon counter with 3D fluxonium `@qrades`
 
 **Role**: Lead — this is my PhD thesis project.
 **Time share**: TODO
@@ -191,28 +199,27 @@ A thread can be named after a project when the work is project-specific; that is
 
 **High priority**
 
-- Try DAQ driver.
-- Try QM driver and control.
-- Figure out how to syncronize the both signals. #research
+- Design a simply cavity to simulate in COMSOL.
+- Try simulate it in Palace. Palace accept mesh files and a .json configuration file. I need to learn how to use it.
+- Compare results between COMSOL and Palace in 3D cavities.
 
 **Medium priority**
-- Compare simulations between COMSOL and Palace.
+- Compare simulations between COMSOL and Palace in 2D resonators.
 - Make a report of the simulations and results obtained.
-- Read fundamental papers.
-- Learn using COMSOL in 3D cavities.
+- Look for a easy way to design cavities and then export to COMSOL/Palace.
 
 **Low priority**
 
-- Debug class I made in SQDMetal.
-- Make user friendly functions in SQDMetal to run simulations using Comsol.
+- Test user friendly functions in SQDMetal that I made to run simulations in Palace/Comsol.
+- PR about save/load function in Quantum Metal.
 
 ---
 
 # 7. Open problems
 
-[ntd_qubit] How to syncronize the both signals. #research
+`[ntd_qubit]` How to syncronize the both signals. #research
 
-@qrades from: Akash V. Dixit et al. PRL **126**, 141302 (2021). I would like to test differents approaches to improve the HMM analysis:
+`@qrades` `[HMM]` from: Akash V. Dixit et al. PRL **126**, 141302 (2021). I would like to test differents approaches to improve the HMM analysis:
 
 - Fit a 2D Gaussian (or make a cumulant expansion) to the IQ data instead of assigning a threshold to each shot and using a constant probability of being ground and read ground ($\mathcal{F}_{g\mathcal{G}}$) or excited and read excited ($\mathcal{F}_{e\mathcal{E}}$). It is **not** the same: thresholding collapses each shot to one bit, so two shots labelled $\mathcal{E}$ carry identical evidence even when their true likelihood ratios differ by five orders of magnitude. Simulated with Dixit's parameters, keeping the raw IQ gives ~1.6x more log-likelihood per shot and raises detection efficiency from 76.4 % to 83.2 % at $\lambda_{thresh} = 10^5$, with no change in the false-positive rate. So we can extract the same information in fewer shots, which is what matters for qubits with low $T_1$ — or equivalently improve the likelihood ratio for the same number of shots. See section 12 for the caveats and what it demands of our calibration.
 
@@ -225,20 +232,19 @@ A thread can be named after a project when the work is project-specific; that is
 
 # 8. Current software
 
-Languages
-
+**Languages**
 - Python
 - C++
 
-Libraries
-
+**Libraries**
 - NumPy
 - SciPy
 - QuTiP
-- Qiskit
+- Qiskit/Quantum Metal
+- SQDMetal (frok of Qiskit Metal)
+- Own toolbok kit.
 
-Commercial software
-
+**Commercial software**
 - HFSS
 - Q3D
 - Comsol
@@ -260,6 +266,7 @@ Commercial software
 
 # 10. Results obtained
 
+- [HMM] Soft simulation of the HMM using the IQ data provided in the paper "Searching for Dark Matter with Superconducting Qubit", Akash V. Dixit et al. 2021. I obtained better discrimination of detection of photons (27/08/2026).
 - [SQDMetal] Reproduced with SQDMetal + Palace the same result previously obtained with Qiskit Metal + Ansys, on my own design.
 - [palace] S21 of a resonator resolved with 2001 points over bw = 10 MHz centered on the resonance, order 1 (30/07/2026).
 - [rfsoc] Relation between DAC units and ADC units established, via DAC units ↔ dBm (27/07/2026).
@@ -268,6 +275,7 @@ Commercial software
 
 # 11. Next milestone
 
+- Learn how to use COMSOL to simulate 3D cavities and qubits. --- 04/09/2026
 
 ---
 

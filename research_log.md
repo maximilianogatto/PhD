@@ -1,5 +1,10 @@
 # Research Log
 
+## 31/08/2026 - monday
+
+
+
+
 ## 28/08/2026 - friday
 
 **Done**
@@ -8,6 +13,8 @@
   - Chip1Q4: T1 = 1.016 ms, f01 = 2.938 GHz, Q = 1.875e7.
   - Chip1Q2: T1 distribution over 40 h, mean 523 us with sigma = 4% of the mean. The Al reference on the same slide spreads ~20%.
   - The interesting number is the 4% stability, not the millisecond.
+
+- [HMM] Add documentation to the HMM notebook, explaining the forward and backward algorithms. #doc
 
 **ToDo**
 - [biblio] Watch arXiv for the Epimon preprint (NICT: Terai, Kim). Keyword "Epimon".
