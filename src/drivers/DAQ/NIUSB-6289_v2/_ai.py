@@ -901,9 +901,7 @@ class AnalogInput(InstrumentModule):
             # 2**32 instead of inside the converter's own resolution. That is
             # silent corruption, so look once, at the first chunk, rather than
             # discovering it in the morning.
-            code_ceiling = 1 << max((self._scaling.get(nm, {}).get("bits",
-                                                                  ADC_BITS)
-                                     for nm in names), default=ADC_BITS)
+            code_ceiling = 1 << max((self._scaling.get(nm, {}).get("bits", ADC_BITS) for nm in names), default=ADC_BITS)
 
             n_done = 0  # number of samples done so far, per channel
             task.start()                       # arms; waits if triggered
