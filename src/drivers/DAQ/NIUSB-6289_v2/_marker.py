@@ -11,6 +11,9 @@ records the scan index of every pulse the OPX (or anything else) sends:
     ...
     marks = np.fromfile(outdir / "markers.i64", dtype=np.int64)
     t = times_from_edges(marks, edges, scans_per_second=rate)  # atomic seconds
+                                                # measured from the trigger,
+                                                # so a mark on the trigger
+                                                # line comes out at t = 0
 
 Same mechanism as the 1 pps, in _stamper.py. Same units, because that is the
 point: markers, 1 pps edges, samples and segment boundaries are ALL scan
