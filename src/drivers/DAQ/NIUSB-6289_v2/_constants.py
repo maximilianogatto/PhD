@@ -58,10 +58,6 @@ DATATYPE_OF_SUFFIX = {v: k for k, v in SUFFIX_OF.items()}
 #: seek into a growing file by sample index without knowing which one it is.
 SAMPLE_BYTES = 4
 
-#: The interchange spelling, as a string, for anyone reading these files with
-#: bare numpy: np.fromfile(path, dtype=RAW_DTYPE)
-RAW_DTYPE = "<u4"
-
 # ============================================================== the device
 AI_CHANNELS = tuple(f"ai{i}" for i in range(32))
 AO_CHANNELS = tuple(f"ao{i}" for i in range(4))    # terminals 15 / 31 / 47 / 63

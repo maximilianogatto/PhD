@@ -46,6 +46,7 @@ this module exists to prevent:
 """
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -472,6 +473,22 @@ def _stored_dtype(entry, header):
     return DTYPE_OF[name]
 
 
+def _configured_range(outdir, channel):
+    """(v_min, v_max) for one channel, from the run.json long_run wrote.
+
+    Only needed for a run whose manifest predates the hardware read-back:
+    describe() has always recorded the REQUESTED range, which DAQmx may have
+    snapped upward, so this is a fallback and not the truth.
+    """
+    info = json.loads((Path(outdir) / "run.json").read_text())
+    for entry in info.get("ai", {}).get("channels", []):
+        if entry.get("name") == channel:
+            return float(entry["v_min"]), float(entry["v_max"])
+    raise KeyError(
+        f"{channel!r} is not in {outdir}/run.json, so the voltage range these "
+        f"samples span is unknown")
+
+
 def _as_units(y, outdir, channel, units, header=None):
     """Convert between raw converter codes and volts, either direction.
 
@@ -519,23 +536,28 @@ def _as_units(y, outdir, channel, units, header=None):
         return (v_min + np.asarray(y, dtype=np.float64)
                 * (v_max - v_min) / span).astype(np.float32)
 
-    # volts -> codes. Prefer the calibrated range the hardware reported over
-    # the one that was requested - DAQmx snaps the request to a hardware
-    # range, and the codes belong to the snapped one.
+    # volts -> codes: the same map inverted, for reading a run that was
+    # recorded as float32 before uint32 existed. Prefer the range the hardware
+    # reported over the one that was requested - DAQmx snaps a request to a
+    # hardware range and the codes belong to the snapped one - and fall back to
+    # run.json for a run whose manifest predates the read-back.
     v_min = scaling.get("v_min_actual")
     v_max = scaling.get("v_max_actual")
     if v_min is None or v_max is None:
-        from rawformat import channel_range
-        v_min, v_max = channel_range(outdir, channel)
-    from rawformat import volts_to_codes
-    codes, n_clipped = volts_to_codes(y, v_min, v_max,
-                                      int(scaling.get("bits", ADC_BITS)))
+        v_min, v_max = _configured_range(outdir, channel)
+    span = (1 << int(scaling.get("bits", ADC_BITS))) - 1
+
+    raw = np.rint((np.asarray(y, dtype=np.float64) - v_min)
+                  * span / (v_max - v_min))
+    # Clipping is COUNTED, not silent: a run that briefly saturated is still
+    # worth exporting, but flattening its peaks without saying so is not
+    # something a caller should have to discover downstream.
+    n_clipped = int(np.count_nonzero((raw < 0) | (raw > span)))
     if n_clipped:
-        import warnings
         warnings.warn(f"{channel}: {n_clipped:,} sample(s) outside "
                       f"{v_min:+g}..{v_max:+g} V were clipped to the code "
                       f"range", stacklevel=2)
-    return codes
+    return np.clip(raw, 0, span).astype(DTYPE_OF["uint32"])
 
 
 def load_segment(outdir, index, channel=None, mmap=False, manifest=None,

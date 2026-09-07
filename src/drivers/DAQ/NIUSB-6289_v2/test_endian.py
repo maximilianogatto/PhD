@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 sys.path.insert(0, "/Users/maximilianogatto/Library/CloudStorage/OneDrive-Personal/PhD/src/drivers/DAQ/NIUSB-6289_v2")
 from _longrun import SegmentWriter
-from postprocess import load_run
+
 import _constants as C
 
 VALUES = [1, 2, 258, 4_294_967_295]        # 258 = 0x00000102, distinguishable
