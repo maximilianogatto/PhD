@@ -60,7 +60,6 @@ shrinks the depth available to the waveform.
 
 from contextlib import contextmanager
 from functools import partial
-from multiprocessing import Value
 
 import numpy as np
 import nidaqmx
@@ -71,11 +70,8 @@ from nidaqmx.constants import (
 from qcodes.instrument import ChannelList, InstrumentChannel, InstrumentModule
 from qcodes.validators import Enum, Numbers
 
-UNDERFLOW = -200621          # driver not writing fast enough
-AO_MAX = 10.0                # +/- volts
-AO_FIFO_FALLBACK = 8191      # M Series spec, used only when the device is mute
-SHAPES = ("square", "sine", "triangle", "ramp")
-ROLES = ("off", "dc", "wave")
+from _constants import (AO_FIFO_FALLBACK, AO_MAX, ROLES,    # noqa: E402
+                        SHAPES, UNDERFLOW)
 
 
 def _waveform(shape, phase, duty):

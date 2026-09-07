@@ -96,7 +96,7 @@ import nidaqmx
 from nidaqmx.constants import (
     AcquisitionType, Edge, TaskMode, TerminalConfiguration,
 )
-from nidaqmx.stream_readers import AnalogMultiChannelReader
+from nidaqmx.stream_readers import AnalogMultiChannelReader, AnalogUnscaledReader
 
 from qcodes.instrument import ChannelList, InstrumentChannel, InstrumentModule
 from qcodes.parameters import Parameter, ParameterWithSetpoints
@@ -111,8 +111,8 @@ try:
 except ImportError:
     DIFF_POSITIVE = list(range(0, 8)) + list(range(16, 24))
 
-OVERFLOW = -200279          # PC not reading the driver buffer fast enough
-FIFO_OVERFLOW = -200361     # USB not draining the onboard FIFO fast enough
+from _constants import (ADC_BITS, DATATYPES, DTYPE_OF,   # noqa: E402
+                        FIFO_OVERFLOW, OVERFLOW)
 
 _TERM_CFG = {"RSE": TerminalConfiguration.RSE,
              "NRSE": TerminalConfiguration.NRSE,
@@ -120,23 +120,53 @@ _TERM_CFG = {"RSE": TerminalConfiguration.RSE,
 
 
 # ============================================================== parameters
+def _axis_length(ai):
+    """How many scans a time axis should cover: the ones actually in hand.
+
+    n_samples() is duration x rate recomputed from the CURRENT settings, so
+    reading an axis after changing duration - or after an acquisition that
+    came back short - hands back an axis of a different length than the data
+    it is supposed to label, and the mismatch only shows up as a broadcast
+    error deep inside a plot call. Prefer the block acquire() left behind.
+    """
+    last = getattr(ai, "_last", None)
+    if last:
+        return len(next(iter(last.values())))
+    return ai.n_samples()
+
+
 class AITimeAxis(Parameter):
     """Sample index / sample rate, common to every channel in the scan.
+
+    The board's OWN clock: it assumes the sample rate is exactly what was
+    asked for, so it drifts against real time by whatever the oscillator does
+    (about 4 s/day uncorrected). atom_time_axis() is this axis with the drift
+    taken out - same zero, real seconds.
 
     Add the channel's time_offset() for the mux delay of a particular input.
     """
 
     def get_raw(self):
         ai = self.instrument                 # the AnalogInput MODULE
-        return np.arange(ai.n_samples()) / ai.actual_rate()
+        return np.arange(_axis_length(ai)) / ai.actual_rate()
 
 
 class AIAtomTimeAxis(Parameter):
     """Time axis in ATOMIC seconds, from the 1 pps edges of the last record.
 
-    t = 0 is the FIRST 1 pps edge and every later edge is exactly +1 s - the
-    definition, not an approximation, because each edge is one atomic second
-    from the rubidium. Samples between edges are linearly interpolated.
+    THE SAME ZERO AS time_axis(): t = 0 is the first sample of the record, so
+    on a triggered run it is the instant the trigger fired. What the rubidium
+    supplies is the SCALE - consecutive 1 pps edges are exactly one atomic
+    second apart by definition, not by approximation, and samples between them
+    are linearly interpolated. So this is time_axis() with the board's
+    oscillator drift removed, and subtracting the two is meaningful.
+
+    (It used to zero on the first EDGE instead. On a triggered run the first
+    edge lands wherever the phase between the rubidium and the trigger happens
+    to put it - 0.83 s into one 300 s record - so the axis carried an
+    arbitrary offset and comparing it to time_axis() showed a constant 828 ms
+    step rather than the few us of drift. Use
+    postprocess.times_from_edges(..., origin="edge") for the old zero.)
 
     Linear on purpose: the relation is piecewise linear by construction and
     the board is stable to 0.05 ppm between edges, so a straight line is exact
@@ -163,7 +193,7 @@ class AIAtomTimeAxis(Parameter):
                 "daq.acquire_with_pps() and check pps.terminal is set")
         # Pass the rate so the edge table is filtered here too, not only
         # when pps.set_last_edges happened to do it.
-        return times_from_edges(np.arange(ai.n_samples()), edges,
+        return times_from_edges(np.arange(_axis_length(ai)), edges,
                                 scans_per_second=ai.actual_rate())
 
 
@@ -306,6 +336,22 @@ class AnalogInput(InstrumentModule):
                       f"'/{parent.device}/PFI8' (terminal 81) for the OPX "
                       f"marker. Applies to the whole scan; there is one start "
                       f"trigger for the task, not one per channel.")
+
+        self.add_parameter(
+            "datatype", label="AI on-disk sample format",
+            get_cmd=None, set_cmd=self._set_invalidating,
+            initial_value="float32", vals=Enum(*DATATYPES),
+            docstring="What a read returns, and therefore what long_run "
+                      "writes. ONE ADC and one buffer per task, so this is a "
+                      "property of the whole scan, not of a channel.\n"
+                      "  float32  volts, scaled by DAQmx    (.f32 files)\n"
+                      "  uint32   raw converter codes        (.u32 files)\n"
+                      "Codes plus scaling_coeff are a SUPERSET of volts: the "
+                      "polynomial turns codes into volts exactly, while volts "
+                      "have already been rounded. int32 rather than uint32 "
+                      "because the ranges are bipolar and the codes are two's "
+                      "complement - read unsigned, every negative sample wraps "
+                      "to about 4.29e9.")
 
         self.add_parameter(
             "actual_rate", label="AI programmed rate", unit="S/s",
@@ -593,8 +639,49 @@ class AnalogInput(InstrumentModule):
         self._check_channel_set(active)
         self._check_rate(active)
 
-        for channel in active:
+        self._scaling = {}
+        for i, channel in enumerate(active):
             task.ai_channels.add_ai_voltage_chan(channel.physical, terminal_config=_TERM_CFG[channel.terminal_config()],min_val=channel.v_min(), max_val=channel.v_max())
+            # READ BACK, never assume. min_val/max_val select the PGA gain and
+            # DAQmx SNAPS them to a hardware range, so what you asked for and
+            # what the converter is doing are different numbers - and the codes
+            # and the polynomial both belong to the second one. Same discipline
+            # as samp_clk_rate and conv_rate.
+            hw = task.ai_channels[i]
+            # READ BACK, never assume. min_val/max_val select the PGA gain and
+            # DAQmx SNAPS them to a hardware range, so what you asked for and
+            # what the converter is doing are different numbers - and a raw
+            # code belongs to the second one. Same discipline as samp_clk_rate
+            # and conv_rate. Together with the resolution, these three numbers
+            # are all anyone needs to turn a code back into volts:
+            #     volts = v_min + code * (v_max - v_min) / (2**bits - 1)
+            info = {}
+            try:
+                info["v_min_actual"] = float(hw.ai_rng_low)
+                info["v_max_actual"] = float(hw.ai_rng_high)
+            except Exception as e:      # older DAQmx, or a property renamed
+                self.log.warning("could not read back the range for %s (%s); "
+                                 "falling back to the requested one, which "
+                                 "DAQmx may have snapped",
+                                 channel.short_name, e)
+                info["v_min_actual"] = float(channel.v_min())
+                info["v_max_actual"] = float(channel.v_max())
+            try:
+                info["bits"] = int(round(float(hw.ai_resolution)))
+            except Exception:
+                info["bits"] = ADC_BITS
+            # optional extras: the calibration polynomial is more accurate than
+            # the linear map above, and the justification says whether a raw
+            # code is right- or left-aligned in its word. Neither is required.
+            for name, prop in (("scaling_coeff", "ai_dev_scaling_coeff"),
+                               ("raw_justification", "ai_raw_samp_justification")):
+                try:
+                    value = getattr(hw, prop)
+                    info[name] = ([float(c) for c in value]
+                                  if name == "scaling_coeff" else str(value))
+                except Exception:
+                    pass
+            self._scaling[channel.short_name] = info
 
         task.timing.cfg_samp_clk_timing(rate=self.rate(), sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=chunk * 10)
 
@@ -752,7 +839,7 @@ class AnalogInput(InstrumentModule):
         self._generation += 1
         return self._last
 
-    def acquire_chunks(self, duration=None, start_armed=True):
+    def acquire_chunks(self, duration=None, start_armed=True, datatype=None):
         """Yield (i0, {channel: array}) as each chunk arrives, constant memory.
 
         start_armed defaults to TRUE: one call, one task, so the _on_armed
@@ -773,6 +860,7 @@ class AnalogInput(InstrumentModule):
         Does NOT feed the `trace` parameters: a streaming read has no single
         record for them to return.
         """
+        datatype = self.datatype() if datatype is None else datatype
         rate = self._verify()[0]
         n_target = None if duration is None else int(round(duration * rate))
         chunk = max(100, int(rate // 5))
@@ -785,8 +873,34 @@ class AnalogInput(InstrumentModule):
             self._actual_rate = rate
             names = [c.short_name for c in active]
 
-            reader = AnalogMultiChannelReader(task.in_stream)
-            buf = np.zeros((len(active), chunk), dtype=np.float64)  # DAQmx writes doubles
+            if datatype == "float32":
+                # float64 is NOT a choice: read_many_sample calls
+                # DAQmxReadAnalogF64, which writes 8 bytes per sample. The
+                # float32 narrowing happens on the way out, below.
+                reader = AnalogMultiChannelReader(task.in_stream)
+                buf = np.zeros((len(active), chunk), dtype=np.float64)
+                read = reader.read_many_sample
+                out_dtype = np.float32
+            elif datatype == "uint32":
+                # AnalogUnscaledReader has no generic read_many_sample - the
+                # method IS the type, so bind it here rather than at the call.
+                reader = AnalogUnscaledReader(task.in_stream)
+                buf = np.zeros((len(active), chunk), dtype=np.uint32)
+                read = reader.read_uint32
+                out_dtype = np.uint32
+            else:
+                raise ValueError(
+                    f"datatype {datatype!r} not supported - "
+                    f"'float32' (volts) or 'uint32' (raw codes)")
+
+            # If the device returns two's complement and read_uint32 merely
+            # reinterprets the bits, every negative sample comes back near
+            # 2**32 instead of inside the converter's own resolution. That is
+            # silent corruption, so look once, at the first chunk, rather than
+            # discovering it in the morning.
+            code_ceiling = 1 << max((self._scaling.get(nm, {}).get("bits",
+                                                                  ADC_BITS)
+                                     for nm in names), default=ADC_BITS)
 
             n_done = 0  # number of samples done so far, per channel
             task.start()                       # arms; waits if triggered
@@ -795,10 +909,21 @@ class AnalogInput(InstrumentModule):
 
             try:
                 while n_target is None or n_done < n_target:
-                    reader.read_many_sample(buf, number_of_samples_per_channel=chunk, timeout=60.0)
-                    
-                    # return the number of samples done so far, and a dict of channel names to arrays. Ready for the next chunk. The arrays are copies, so the caller can keep them.
-                    yield n_done, {nm: buf[i].astype(np.float32)for i, nm in enumerate(names)}
+                    read(buf, number_of_samples_per_channel=chunk, timeout=60.0)
+
+                    # a fresh copy per chunk, in the format the caller asked
+                    # for - astype copies even when the dtype already matches,
+                    # so the next read cannot overwrite what was yielded.
+                    if datatype == "uint32" and n_done == 0 and buf.max() >= code_ceiling:
+                        raise RuntimeError(
+                            f"read_uint32 returned codes up to {buf.max():,}, "
+                            f"beyond the converter's {code_ceiling - 1:,} - so "
+                            f"this device hands over TWO'S COMPLEMENT and the "
+                            f"unsigned read is reinterpreting negative samples "
+                            f"as ~4.29e9. Read with read_int32 and add "
+                            f"{code_ceiling >> 1:,} to get offset binary.")
+
+                    yield n_done, {nm: buf[i].astype(out_dtype) for i, nm in enumerate(names)}
                     n_done += chunk     # increment the number of samples done so far, per channel
             except KeyboardInterrupt:
                 self.log.info("stopped by user after %d samples (%.3f s)",
@@ -898,9 +1023,11 @@ class AnalogInput(InstrumentModule):
             rate, conv = self._verify()
         except Exception:
             rate = conv = None
+        scaling = getattr(self, "_scaling", {})
         return {
             "rate_requested": self.rate(),
             "rate_actual": rate,
+            "datatype": self.datatype(),
             "conv_rate": conv,
             "duration": self.duration(),
             "trigger": self.trigger(),
@@ -912,6 +1039,7 @@ class AnalogInput(InstrumentModule):
                  "time_offset": (i / conv) if conv and np.isfinite(conv)
                                 else None,
                  "v_min": c.v_min(), "v_max": c.v_max(),
+                 **scaling.get(c.short_name, {}),
                  "terminal_config": c.terminal_config()}
                 for i, c in enumerate(self.active)],
             "limits": {"max_single_rate": self._max_single_rate,

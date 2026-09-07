@@ -47,6 +47,8 @@ from pathlib import Path
 
 import numpy as np
 
+from _constants import DATATYPES, DTYPE_OF, SUFFIX_OF   # noqa: E402
+
 
 class SegmentWriter:
     """Rotating per-channel .f32 files, plus the manifest and edge table.
@@ -57,7 +59,7 @@ class SegmentWriter:
     """
 
     def __init__(self, outdir, channels, rate, rotate_scans=None,
-                 convert_q=None, verbose=True):
+                 convert_q=None, verbose=True, datatype="float32"):
         self.outdir = Path(outdir)
         self.channels = list(channels)
         self.rate = rate
@@ -70,6 +72,18 @@ class SegmentWriter:
         self.names = {}              # {channel: filename}
         self.start_scan = 0          # global scan index this segment began at
         self.n = 0                   # scans written to the current segment
+        # What the acquisition hands over, and therefore what goes on disk.
+        # The suffix is the ONLY thing that distinguishes a 4-byte float file
+        # from a 4-byte int one, so it is not cosmetic - and the manifest
+        # records it too, because a suffix can be renamed.
+        self.datatype = datatype
+        try:
+            self.dtype = DTYPE_OF[datatype]
+            self.suffix = SUFFIX_OF[datatype]
+        except KeyError:
+            raise ValueError(
+                f"datatype {datatype!r} not supported - one of "
+                f"{list(DATATYPES)}") from None
 
         # A second run in the same directory would append to the manifest
         # while restarting BOTH the segment index and the scan numbering at 0.
@@ -178,7 +192,7 @@ class SegmentWriter:
         self.index += 1
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         for channel in self.channels:
-            name = f"seg_{self.index:05d}_{channel}_{stamp}.f32"
+            name = f"seg_{self.index:05d}_{channel}_{stamp}{self.suffix}"
             self.names[channel] = name
             self.files[channel] = open(self.outdir / name, "wb")
         self.start_scan = scan
@@ -195,7 +209,7 @@ class SegmentWriter:
         length = 0
         for channel in self.channels:
             values = data[channel]
-            values.astype(np.float32, copy=False).tofile(self.files[channel])
+            values.astype(self.dtype, copy=False).tofile(self.files[channel])
             self.files[channel].flush()
             length = len(values)
         self.n += length

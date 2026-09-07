@@ -59,13 +59,10 @@ except ImportError:                            # the driver still works
 # Fallbacks only - the real numbers come from the device. Measured on a
 # USB-6289: single 666,666.67 S/s (20 MHz / 30), multi-channel 500,000 S/s
 # AGGREGATE. The two limits are different, so both are queried.
-AI_MAX_SINGLE_FALLBACK = 666_666.67
-AI_MAX_MULTI_FALLBACK = 500_000.0
-AI_CHANNELS = tuple(f"ai{i}" for i in range(32))
-AO_CHANNELS = tuple(f"ao{i}" for i in range(4))    # terminals 15 / 31 / 47 / 63
-COUNTERS = ("ctr0", "ctr1")
-PFI_LINES = tuple(f"PFI{i}" for i in range(16))
-AI_RANGES = (0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)   # M Series programmable gains
+from _constants import (AI_CHANNELS, AI_MAX_MULTI_FALLBACK,   # noqa: E402
+                        AI_MAX_SINGLE_FALLBACK, AI_RANGES,
+                        AO_CHANNELS, COUNTERS, M_SERIES_DEFAULTS,
+                        PFI_LINES)
 
 # DEFAULT counter terminals, from the M Series user manual. NOT a restriction:
 # every PFI line on an M Series board is fully routable to every timing signal,
@@ -75,17 +72,6 @@ AI_RANGES = (0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)   # M Series programmable gains
 # left on its defaults will quietly grab them.
 #
 # terminal_roles() prefers what the DEVICE reports and falls back to this.
-M_SERIES_DEFAULTS = {
-    "PFI3":  "CTR 1 SRC (default)",
-    "PFI4":  "CTR 1 GATE (default)",
-    "PFI8":  "CTR 0 SRC (default)",
-    "PFI9":  "CTR 0 GATE (default)",
-    "PFI10": "CTR 0 AUX (default)",
-    "PFI11": "CTR 1 AUX (default)",
-    "PFI12": "CTR 0 OUT (default)",
-    "PFI13": "CTR 1 OUT (default)",
-    "PFI14": "FREQ OUT (default)",
-}
 
 
 class USB6289(Instrument):
@@ -300,6 +286,13 @@ class USB6289(Instrument):
         scan 0 IS an atomic second (the first edge comes back as 0); point it
         at the QM marker and the first edge tells you how far the next atomic
         second was from the start of the shot.
+
+        SO SCAN 0 IS THE TRIGGER, ALWAYS, and that is where the atomic time
+        axis puts t = 0 - not on the first edge, which on an ordinary
+        triggered run is 0.8 s into the record and carries no meaning beyond
+        the phase between two unrelated clocks. The rubidium sets the SCALE of
+        that axis; the trigger sets its ZERO. See postprocess.times_from_edges
+        if you need the other convention (origin="edge").
 
         MARKERS TOO, if marker.terminal is set. A one-shot acquisition gets
         them exactly as long_run does - the counter runs alongside the record -
@@ -936,7 +929,14 @@ class USB6289(Instrument):
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
 
+        # ONE source of truth. There is deliberately no datatype argument
+        # here: the format belongs to the channel configuration, and a run
+        # that could be told "float32" while the channels were set up as
+        # uint32 would write codes into a file claiming to hold volts.
+        datatype = self.ai.datatype()
+
         use_pps = bool(self.pps.terminal())
+        use_marker = bool(self.marker.terminal())
         if not use_pps and require_pps:
             raise ValueError(
                 "pps.terminal is not set. Over a day the board's clock drifts "
@@ -976,8 +976,10 @@ class USB6289(Instrument):
             print(f"long run -> {outdir}")
             rotation = ("one file per channel" if rotate_minutes is None
                         else f"rotating every {rotate_minutes} min")
+            stored = ("float32 volts" if datatype == "float32"
+                      else f"{datatype} ADC codes")
             print(f"  {rate:,.3f} S/s x {len(channels)} channel(s) "
-                  f"{channels}, float32, {rotation}")
+                  f"{channels}, {stored}, {rotation}")
             print(f"  {gb_day:.1f} GB/day, {gb_day * 7:.0f} GB/week")
             print("  interrupt to stop cleanly")
 
@@ -994,9 +996,24 @@ class USB6289(Instrument):
         convert_q = queue.Queue() if to_hdf5 else None
         if convert_q is not None:
             threading.Thread(target=_hdf5_worker, args=(convert_q, verbose),daemon=True).start()
-
-        writer = SegmentWriter(outdir, channels, rate, rotate_scans,convert_q=convert_q, verbose=verbose)
-        writer.log({"event": "start", "channels": channels, "nominal_rate": rate, "conv_rate": conv_rate, "wall": time.time()})
+            
+        writer = SegmentWriter(outdir, channels, rate, rotate_scans,
+                               convert_q=convert_q, verbose=verbose,
+                               datatype=datatype)
+        # THE HEADER HAS TO CARRY THE FORMAT. A .f32 and a .i32 are both four
+        # bytes a sample and neither says what it is; and raw codes without
+        # the range and the polynomial that produced them are unreadable. The
+        # scaling comes from describe(), which reads it back from the hardware.
+        ai_info = self.describe().get("ai", {})
+        writer.log({"event": "start", "channels": channels,
+                    "nominal_rate": rate, "conv_rate": conv_rate,
+                    "datatype": datatype,
+                    "scaling": {c["name"]: {k: c[k] for k in
+                                            ("v_min_actual", "v_max_actual",
+                                             "bits", "scaling_coeff",
+                                             "raw_justification") if k in c}
+                                for c in ai_info.get("channels", [])},
+                    "wall": time.time()})
 
         n = 0   # scans written so far, across all segments. 
         chunks = None                # the live generator, closed in the finally
@@ -1016,7 +1033,7 @@ class USB6289(Instrument):
                     # need the opposite - something re-emitted so a restarted
                     # task sees its trigger - do it in the gap handler below,
                     # where you know a gap happened. See set_on_armed.
-                    chunks = self.ai.acquire_chunks(duration=None, start_armed=arm_on_start) # this is a generator, so it does not block until the whole run is done
+                    chunks = self.ai.acquire_chunks(duration=None, start_armed=arm_on_start, datatype=datatype) # this is a generator, so it does not block until the whole run is done
                     arm_on_start = False
                     for _, chunk in chunks:
                         if n == 0:

@@ -42,7 +42,9 @@ from pathlib import Path
 
 import numpy as np
 
-BYTES = 4          # float32
+from _constants import DTYPE_OF, SAMPLE_BYTES, SUFFIX_OF   # noqa: E402
+
+BYTES = SAMPLE_BYTES       # every supported format is 4 bytes a sample
 
 
 class RunFiles:
@@ -68,6 +70,11 @@ class RunFiles:
                     break
         self.channels = header.get("channels", [])
         self.rate = header.get("nominal_rate", 25_000.0)
+        # What is IN the files. A .f32 and a .u32 are both 4 bytes a sample
+        # and neither says so; the run that wrote them did, in the header.
+        self.datatype = header.get("datatype", "float32")
+        self.dtype = DTYPE_OF[self.datatype]
+        self.suffix = SUFFIX_OF[self.datatype]
         self.channel = channel or (self.channels[0] if self.channels else None)
         if self.channel is None:
             raise ValueError(f"no channels recorded in {manifest_path}")
@@ -88,7 +95,8 @@ class RunFiles:
                 found[entry["index"]] = (entry["start_sample"],
                                          self.outdir / entry["file"])
 
-        for path in sorted(self.outdir.glob(f"seg_*_{self.channel}_*.f32")):
+        for path in sorted(self.outdir.glob(
+                f"seg_*_{self.channel}_*{self.suffix}")):
             index = int(path.name.split("_")[1])
             if index not in found:
                 # Open segment: its start is where the previous one ended.
@@ -122,10 +130,10 @@ class RunFiles:
                 continue
             lo = max(want_from, seg_start) - seg_start
             hi = min(want_to, seg_end) - seg_start
-            out.append(np.fromfile(path, dtype=np.float32,
+            out.append(np.fromfile(path, dtype=self.dtype,
                                    count=hi - lo, offset=lo * BYTES))
         if not out:
-            return np.zeros(0, dtype=np.float32)
+            return np.zeros(0, dtype=self.dtype)
         return np.concatenate(out)
 
 
@@ -275,6 +283,16 @@ class LiveScope:
         t, low, high, info = self.data()
         ax = self._ax
         ax.clear()
+        if len(t) == 0:
+            ax.set_title(f"{info['channel']}  |  Waiting for data...")
+            ax.set_xlabel("board time [s]")
+            ax.set_ylabel("V")
+            ax.set_xlim(0, self.width)
+            ax.set_ylim(-10, 10)
+            if self._fig is not None and hasattr(self._fig, "canvas"):
+                self._fig.canvas.draw_idle()
+            return
+
         ax.fill_between(t, low, high, step="mid", linewidth=0,
                         color="tab:blue")
         if self.threshold is not None:
@@ -290,7 +308,8 @@ class LiveScope:
         ax.set_xlabel("board time [s]   (atomic correction applied offline)")
         ax.set_ylabel("V")
         ax.set_xlim(t[0], t[-1] if len(t) > 1 else t[0] + self.width)
-        self._fig.canvas.draw_idle()
+        if self._fig is not None and hasattr(self._fig, "canvas"):
+            self._fig.canvas.draw_idle()
 
     def _open(self):
         import matplotlib.pyplot as plt

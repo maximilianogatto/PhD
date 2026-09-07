@@ -64,10 +64,8 @@ from nidaqmx.constants import (
 from qcodes.instrument import InstrumentModule
 from qcodes.validators import Enum
 
-COUNTER_BITS = 32           # rolls over every 47.7 h at 25 kS/s
-DRAIN_ERROR_BACKOFF = 1.0   # s, after a counter read that failed immediately
-MAX_DRAIN_ERRORS = 30       # consecutive failures before the reader gives up
-READ_TIMEOUT = 1.5          # s; longer than the 1 s between 1 pps pulses
+from _constants import (COUNTER_BITS, DRAIN_ERROR_BACKOFF,   # noqa: E402
+                        MAX_DRAIN_ERRORS, READ_TIMEOUT)
 
 
 class ScanStamper(InstrumentModule):
