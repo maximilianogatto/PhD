@@ -51,7 +51,8 @@ from pathlib import Path
 import numpy as np
 
 from _constants import (ADC_BITS, ANCHOR_CANDIDATES,      # noqa: E402
-                        DATATYPE_OF_SUFFIX, DTYPE_OF, UNITS_OF)
+                        DATATYPE_OF_SUFFIX, DTYPE_OF, INDEX_DTYPE,
+                        UNITS_OF)
 
 
 # =============== Time to atomic seconds ==========================
@@ -386,7 +387,7 @@ def load_long_run(outdir):
     outdir = Path(outdir)
     lines = (outdir / "manifest.jsonl").read_text().splitlines()
     manifest = [json.loads(x) for x in lines if x.strip()]
-    edges = np.fromfile(outdir / "edges.i64", dtype=np.int64)
+    edges = np.fromfile(outdir / "edges.i64", dtype=INDEX_DTYPE)
     return manifest, edges
 
 
@@ -683,7 +684,7 @@ def load_markers(outdir):
     path = Path(outdir) / "markers.i64"
     if not path.exists():
         return np.zeros(0, dtype=np.int64)
-    return np.fromfile(path, dtype=np.int64)
+    return np.fromfile(path, dtype=INDEX_DTYPE)
 
 
 def marker_times(outdir):

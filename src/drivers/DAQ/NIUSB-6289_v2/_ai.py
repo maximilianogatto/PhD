@@ -880,14 +880,14 @@ class AnalogInput(InstrumentModule):
                 reader = AnalogMultiChannelReader(task.in_stream)
                 buf = np.zeros((len(active), chunk), dtype=np.float64)
                 read = reader.read_many_sample
-                out_dtype = np.float32
+                out_dtype = DTYPE_OF["float32"]
             elif datatype == "uint32":
                 # AnalogUnscaledReader has no generic read_many_sample - the
                 # method IS the type, so bind it here rather than at the call.
                 reader = AnalogUnscaledReader(task.in_stream)
                 buf = np.zeros((len(active), chunk), dtype=np.uint32)
                 read = reader.read_uint32
-                out_dtype = np.uint32
+                out_dtype = DTYPE_OF["uint32"]
             else:
                 raise ValueError(
                     f"datatype {datatype!r} not supported - "

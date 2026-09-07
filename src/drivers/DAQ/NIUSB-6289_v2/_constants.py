@@ -35,10 +35,18 @@ ADC_BITS = 18
 #:
 #:   float32   volts, already scaled by DAQmx
 #:   uint32    raw converter codes, offset binary - the interchange format
+#: EXPLICITLY LITTLE-ENDIAN, not np.float32/np.uint32. Those are NATIVE order
+#: ("=") which merely happens to be little on x86 and ARM, so the byte order of
+#: an interchange format would be a property of whoever ran the acquisition.
+#: "<" pins it, and costs nothing on a little-endian host - numpy compares the
+#: two dtypes equal there, so nothing downstream notices.
 SAMPLE_FORMATS = {
-    "float32": {"suffix": ".f32", "dtype": np.float32, "units": "V"},
-    "uint32":  {"suffix": ".u32", "dtype": np.uint32,  "units": "ADC codes"},
+    "float32": {"suffix": ".f32", "dtype": np.dtype("<f4"), "units": "V"},
+    "uint32":  {"suffix": ".u32", "dtype": np.dtype("<u4"), "units": "ADC codes"},
 }
+
+#: edges.i64 and markers.i64 - scan indices, on disk, same reasoning
+INDEX_DTYPE = np.dtype("<i8")
 
 DATATYPES = tuple(SAMPLE_FORMATS)                       # for a vals=Enum(...)
 SUFFIX_OF = {k: v["suffix"] for k, v in SAMPLE_FORMATS.items()}
@@ -50,8 +58,8 @@ DATATYPE_OF_SUFFIX = {v: k for k, v in SUFFIX_OF.items()}
 #: seek into a growing file by sample index without knowing which one it is.
 SAMPLE_BYTES = 4
 
-#: The on-the-wire dtype for raw files: little-endian unsigned 32-bit, spelled
-#: explicitly so a big-endian host would still write what the other group reads.
+#: The interchange spelling, as a string, for anyone reading these files with
+#: bare numpy: np.fromfile(path, dtype=RAW_DTYPE)
 RAW_DTYPE = "<u4"
 
 # ============================================================== the device

@@ -47,7 +47,8 @@ from pathlib import Path
 
 import numpy as np
 
-from _constants import DATATYPES, DTYPE_OF, SUFFIX_OF   # noqa: E402
+from _constants import (DATATYPES, DTYPE_OF, INDEX_DTYPE,   # noqa: E402
+                        SUFFIX_OF)
 
 
 class SegmentWriter:
@@ -222,7 +223,7 @@ class SegmentWriter:
         """Append 1 pps positions. Shared by every channel: they are scan
         indices, and all channels are on the same scan clock."""
         if len(edges):
-            edges.astype(np.int64, copy=False).tofile(self._edges)
+            edges.astype(INDEX_DTYPE, copy=False).tofile(self._edges)
             self._edges.flush() # flush so the tail of the file can be read while it is still being written
 
     def write_marks(self, marks):
@@ -232,7 +233,7 @@ class SegmentWriter:
             return
         if self._marks is None:
             self._marks = open(self.outdir / "markers.i64", "xb")
-        marks.astype(np.int64, copy=False).tofile(self._marks)
+        marks.astype(INDEX_DTYPE, copy=False).tofile(self._marks)
         self._marks.flush()
 
     def close(self, scan):
