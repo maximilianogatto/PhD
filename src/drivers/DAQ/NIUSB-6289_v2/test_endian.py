@@ -5,7 +5,7 @@ be a property of the acquiring machine. So feed the writer BIG-endian arrays,
 which is what a big-endian host's native uint32 would look like, and check the
 bytes that land on disk.
 """
-import shutil, sys, time
+import sys, tempfile, time
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, "/Users/maximilianogatto/Library/CloudStorage/OneDrive-Personal/PhD/src/drivers/DAQ/NIUSB-6289_v2")
@@ -26,9 +26,11 @@ assert C.INDEX_DTYPE.str == "<i8"
 for order, label in (("<u4", "little-endian input"),
                      (">u4", "BIG-endian input   "),
                      ("=u4", "native input       ")):
-    OUT = Path("endian_" + order[0].replace("<", "le").replace(">", "be")
-               .replace("=", "na"))
-    shutil.rmtree(OUT, ignore_errors=True); OUT.mkdir(parents=True)
+    # A TEMP DIRECTORY, not the working one: this file lives beside the
+    # modules it tests, so writing run directories relative to the CWD leaves
+    # them in the repo every time anyone runs it.
+    tmp = tempfile.TemporaryDirectory()
+    OUT = Path(tmp.name)
     w = SegmentWriter(OUT, ["ai1"], 25_000.0, verbose=False, datatype="uint32")
     w.log({"event": "start", "channels": ["ai1"], "nominal_rate": 25_000.0,
            "datatype": "uint32",
@@ -46,7 +48,8 @@ for order, label in (("<u4", "little-endian input"),
     back = np.fromfile(seg, dtype="<u4")
     assert list(back) == VALUES, back
     print(f"  {label} -> {raw[:8].hex(' ')} ...  LITTLE endian on disk, "
-          f"reads back {list(back)}")
+          f"reads back {[int(v) for v in back]}")
+    tmp.cleanup()
 
 print("\nthe writer normalises byte order; the deliverable does not depend "
       "on the acquiring host")
