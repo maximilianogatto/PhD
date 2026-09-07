@@ -666,10 +666,13 @@ class AnalogInput(InstrumentModule):
                                  channel.short_name, e)
                 info["v_min_actual"] = float(channel.v_min())
                 info["v_max_actual"] = float(channel.v_max())
-            try:
-                info["bits"] = int(round(float(hw.ai_resolution)))
-            except Exception:
-                info["bits"] = ADC_BITS
+            # HARDCODED, from _constants.ADC_BITS. The resolution is a
+            # property of the board, not of a run, so it does not need to be
+            # asked for every acquisition - and one constant is easier to find
+            # and change than a device property nobody knows is being read.
+            # The first-chunk check in acquire_chunks is what notices if a
+            # device ever disagrees with it.
+            info["bits"] = ADC_BITS
             # optional extras: the calibration polynomial is more accurate than
             # the linear map above, and the justification says whether a raw
             # code is right- or left-aligned in its word. Neither is required.
