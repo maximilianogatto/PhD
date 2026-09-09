@@ -1,0 +1,292 @@
+{
+  "design_module": "qiskit_metal.designs.design_planar",
+  "design_class": "DesignPlanar",
+  "variables": {
+    "cpw_width": "20um",
+    "cpw_gap": "11um"
+  },
+  "chips": {
+    "main": {
+      "material": "silicon",
+      "layer_start": "0",
+      "layer_end": "2048",
+      "size": {
+        "center_x": "1.6250mm",
+        "center_y": "2.3955mm",
+        "center_z": "0.0mm",
+        "size_x": "3.5760mm",
+        "size_y": "2.1510mm",
+        "size_z": "-600um",
+        "sample_holder_top": "890um",
+        "sample_holder_bottom": "1650um"
+      }
+    }
+  },
+  "components": [
+    {
+      "name": "Q1",
+      "module": "toolkit.components.qubit.circle_transmon",
+      "class": "CircTransmon",
+      "options": {
+        "pos_x": "1.8mm",
+        "pos_y": "1.6mm",
+        "orientation": 0,
+        "chip": "main",
+        "layer": "1",
+        "connection_pads": {},
+        "cpw_width": "20um",
+        "cpw_gap": "11um",
+        "pad_radius": "120um",
+        "pad_gap": "10um",
+        "jj_options": {
+          "jj_width": "5um",
+          "L_j": "40.7885nH",
+          "C_j": "0.72fF",
+          "export_mask": false,
+          "gds_cell_jj": "gds_cell_jj",
+          "jj_sim_gap": "8um"
+        },
+        "claw_a_options": {
+          "make_claw": true,
+          "connector_location": "90",
+          "claw_width": "50um",
+          "claw_gap": "30um",
+          "claw_length": "200um",
+          "ground_spacing": "10um",
+          "connector_length": "70um"
+        },
+        "claw_b_options": {
+          "make_claw": false,
+          "connector_location": "0",
+          "claw_width": "50um",
+          "claw_gap": "30um",
+          "claw_length": "100um",
+          "ground_spacing": "10um",
+          "connector_length": "50um"
+        },
+        "charge_line": {
+          "make_charge_line": true,
+          "location": "180",
+          "pad_radius": "40um",
+          "pad_gap": "40um",
+          "ground_spacing": "15um",
+          "line_length": "100um"
+        },
+        "hfss_wire_bonds": false,
+        "q3d_wire_bonds": false,
+        "aedt_q3d_wire_bonds": false,
+        "aedt_hfss_wire_bonds": false,
+        "hfss_inductance": "10nH",
+        "hfss_capacitance": 0,
+        "hfss_resistance": 0,
+        "hfss_mesh_kw_jj": 7e-06,
+        "q3d_inductance": "10nH",
+        "q3d_capacitance": 0,
+        "q3d_resistance": 0,
+        "q3d_mesh_kw_jj": 7e-06,
+        "gds_cell_name": "my_other_junction",
+        "aedt_q3d_inductance": 1e-08,
+        "aedt_q3d_capacitance": 0,
+        "aedt_hfss_inductance": 1e-08,
+        "aedt_hfss_capacitance": 0
+      }
+    },
+    {
+      "name": "LP1",
+      "module": "qiskit_metal.qlibrary.terminations.launchpad_wb_driven",
+      "class": "LaunchpadWirebondDriven",
+      "options": {
+        "pos_x": "0.25mm",
+        "pos_y": "3.2mm",
+        "orientation": "360",
+        "chip": "main",
+        "layer": "1",
+        "trace_width": "20um",
+        "trace_gap": "11um",
+        "lead_length": "10um",
+        "pad_width": "120um",
+        "pad_height": "80um",
+        "pad_gap": "61um",
+        "taper_height": "122um"
+      }
+    },
+    {
+      "name": "LP2",
+      "module": "qiskit_metal.qlibrary.terminations.launchpad_wb_driven",
+      "class": "LaunchpadWirebondDriven",
+      "options": {
+        "pos_x": "3mm",
+        "pos_y": "3.2mm",
+        "orientation": "180",
+        "chip": "main",
+        "layer": "1",
+        "trace_width": "20um",
+        "trace_gap": "11um",
+        "lead_length": "10um",
+        "pad_width": "120um",
+        "pad_height": "80um",
+        "pad_gap": "61um",
+        "taper_height": "122um"
+      }
+    },
+    {
+      "name": "linea_1",
+      "module": "qiskit_metal.qlibrary.tlines.pathfinder",
+      "class": "RoutePathfinder",
+      "options": {
+        "chip": "main",
+        "layer": "1",
+        "pin_inputs": {
+          "start_pin": {
+            "component": "LP1",
+            "pin": "tie"
+          },
+          "end_pin": {
+            "component": "LP2",
+            "pin": "tie"
+          }
+        },
+        "fillet": "0um",
+        "lead": {
+          "start_straight": "0mm",
+          "end_straight": "0.0mm",
+          "start_jogged_extension": "",
+          "end_jogged_extension": ""
+        },
+        "total_length": "7mm",
+        "trace_width": "20um",
+        "anchors": {},
+        "advanced": {
+          "avoid_collision": "true"
+        },
+        "step_size": "0.25mm",
+        "hfss_wire_bonds": true,
+        "q3d_wire_bonds": false,
+        "aedt_q3d_wire_bonds": false,
+        "aedt_hfss_wire_bonds": false,
+        "trace_gap": "11um",
+        "_actual_length": "2.7300000000000004 mm"
+      }
+    },
+    {
+      "name": "LPC",
+      "module": "qiskit_metal.qlibrary.terminations.launchpad_wb_driven",
+      "class": "LaunchpadWirebondDriven",
+      "options": {
+        "pos_x": "0.5mm",
+        "pos_y": "1.6mm",
+        "orientation": "0",
+        "chip": "main",
+        "layer": "1",
+        "trace_width": "20um",
+        "trace_gap": "11um",
+        "lead_length": "10um",
+        "pad_width": "120um",
+        "pad_height": "80um",
+        "pad_gap": "61um",
+        "taper_height": "122um"
+      }
+    },
+    {
+      "name": "con_charge_line",
+      "module": "qiskit_metal.qlibrary.tlines.pathfinder",
+      "class": "RoutePathfinder",
+      "options": {
+        "chip": "main",
+        "layer": "1",
+        "pin_inputs": {
+          "start_pin": {
+            "component": "LPC",
+            "pin": "tie"
+          },
+          "end_pin": {
+            "component": "Q1",
+            "pin": "charge_line"
+          }
+        },
+        "fillet": "0",
+        "lead": {
+          "start_straight": "0mm",
+          "end_straight": "0.0mm",
+          "start_jogged_extension": "",
+          "end_jogged_extension": ""
+        },
+        "total_length": "7mm",
+        "trace_width": "20um",
+        "anchors": {},
+        "advanced": {
+          "avoid_collision": "true"
+        },
+        "step_size": "0.25mm",
+        "hfss_wire_bonds": true,
+        "q3d_wire_bonds": false,
+        "aedt_q3d_wire_bonds": false,
+        "aedt_hfss_wire_bonds": false,
+        "trace_gap": "11um",
+        "_actual_length": "0.95 mm"
+      }
+    },
+    {
+      "name": "stg1",
+      "module": "qiskit_metal.qlibrary.terminations.short_to_ground",
+      "class": "ShortToGround",
+      "options": {
+        "pos_x": "1mm",
+        "pos_y": "2.3mm",
+        "orientation": "180",
+        "chip": "main",
+        "layer": "1",
+        "width": "10um"
+      }
+    },
+    {
+      "name": "meandro_1",
+      "module": "qiskit_metal.qlibrary.tlines.meandered",
+      "class": "RouteMeander",
+      "options": {
+        "chip": "main",
+        "layer": "1",
+        "pin_inputs": {
+          "start_pin": {
+            "component": "stg1",
+            "pin": "short"
+          },
+          "end_pin": {
+            "component": "Q1",
+            "pin": "claw_a"
+          }
+        },
+        "fillet": "90um",
+        "lead": {
+          "start_straight": "0.02mm",
+          "end_straight": "1.278mm",
+          "start_jogged_extension": "",
+          "end_jogged_extension": {
+            "0": [
+              "L",
+              "400um"
+            ],
+            "1": [
+              "L",
+              "100um"
+            ]
+          }
+        },
+        "total_length": "4.215827323608139mm",
+        "trace_width": "20um",
+        "meander": {
+          "spacing": "250um",
+          "asymmetry": "0um"
+        },
+        "snap": "true",
+        "prevent_short_edges": "true",
+        "hfss_wire_bonds": true,
+        "q3d_wire_bonds": false,
+        "aedt_q3d_wire_bonds": false,
+        "aedt_hfss_wire_bonds": false,
+        "trace_gap": "11um",
+        "_actual_length": "4.215827323608139 mm"
+      }
+    }
+  ]
+}

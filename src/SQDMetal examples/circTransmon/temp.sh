@@ -1,2 +1,0 @@
-cd "/Users/maximilianogatto/Library/CloudStorage/OneDrive-Personal/PhD/src/SQDMetal examples/circTransmon/circTransmon_S21"
-/Users/maximilianogatto/Library/CloudStorage/OneDrive-Personal/PhD/src/libraries/palace/build/bin/palace -np 4 -nt 1 circTransmon_S21.json 2>&1 | tee "/Users/maximilianogatto/Library/CloudStorage/OneDrive-Personal/PhD/src/SQDMetal examples/circTransmon/circTransmon_S21/outputFiles/out.log"
