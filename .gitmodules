@@ -8,3 +8,7 @@
 [submodule "src/toolkit"]
 	path = src/toolkit
 	url = https://github.com/maximilianogatto/toolkit.git
+[submodule "src/drivers/RFSoC 4x2"]
+	path = src/drivers/RFSoC 4x2
+	url = https://github.com/maximilianogatto/RFSoC4x2_driver.git
+	branch = main
